@@ -1,0 +1,9 @@
+{
+  "anthropic_api_key": "YOUR_API_KEY_HERE",
+  "default_excel_file": "investment_data.xlsx",
+  "default_prices_file": "stock_prices.csv",
+  "cash_equivalents": ["BIL", "USFR", "PJLXX"],
+  "default_cash_floor_percent": 0.02,
+  "default_target_allocation_percent": 0.025,
+  "default_skip_if_above_percent": 0.02
+}
