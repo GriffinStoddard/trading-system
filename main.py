@@ -353,7 +353,7 @@ def run_trade_workflow(accounts: dict, stock_prices: dict[str, float], buy_list:
     base_path = get_base_path()
     report_file = sell_file.replace("_SELL.csv", "_REPORT.txt")
     report_path = base_path / report_file
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"\nReport saved to: {report_file}")
 
