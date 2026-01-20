@@ -32,6 +32,60 @@ from config import load_config, save_config, get_api_key
 VERSION = "1.0.0"
 
 
+def get_friendly_error_message(error: Exception) -> str:
+    """Convert an exception into a user-friendly error message."""
+    error_str = str(error).lower()
+    error_type = type(error).__name__
+
+    # Excel/file reading errors
+    if "no such file" in error_str or "file not found" in error_str or isinstance(error, FileNotFoundError):
+        return "Could not find the specified file. Please check that the file exists and the path is correct."
+
+    if "permission denied" in error_str or isinstance(error, PermissionError):
+        return "Permission denied. The file may be open in another program (like Excel). Please close it and try again."
+
+    if "account number" in error_str:
+        return "The Excel file is missing the required 'Account Number' column. Please check your file format."
+
+    if "symbol" in error_str and "cusip" in error_str:
+        return "The Excel file is missing the required 'Symbol / CUSIP / ID' column. Please check your file format."
+
+    if "quantity" in error_str:
+        return "The Excel file is missing the required 'Quantity' column. Please check your file format."
+
+    if "price" in error_str and "nav" in error_str:
+        return "The Excel file is missing the required 'Price / NAV' column. Please check your file format."
+
+    if "market value" in error_str:
+        return "The Excel file is missing the required 'Market Value' column. Please check your file format."
+
+    if "worksheet" in error_str or "sheet" in error_str:
+        return "Could not read the Excel worksheet. Please make sure the file is a valid Excel file (.xlsx)."
+
+    if isinstance(error, pd.errors.EmptyDataError):
+        return "The file appears to be empty. Please check that it contains data."
+
+    if "ticker" in error_str or "price" in error_str:
+        return "Error reading the stock prices file. Please make sure it has 'TICKER' and 'PRICE' columns."
+
+    # API/Network errors
+    if "api" in error_str or "unauthorized" in error_str or "authentication" in error_str:
+        return "API authentication failed. Please check that your API key in config.json is correct."
+
+    if "connection" in error_str or "network" in error_str or "timeout" in error_str:
+        return "Network connection error. Please check your internet connection and try again."
+
+    if "rate limit" in error_str:
+        return "API rate limit reached. Please wait a moment and try again."
+
+    # JSON/Config errors
+    if "json" in error_str or isinstance(error, (ValueError,)) and "json" in error_type.lower():
+        return "Configuration file error. The config.json file may be corrupted. Try deleting it to reset to defaults."
+
+    # Generic fallback with the actual error for unknown cases
+    return f"An error occurred: {error}"
+
+
 def get_base_path() -> Path:
     """Get the base path for finding data files."""
     if getattr(sys, 'frozen', False):
@@ -317,7 +371,7 @@ def run_trade_workflow(accounts: dict, stock_prices: dict[str, float], buy_list:
             plan = interpret_specification(spec, accounts, buy_list, stock_prices)
             print(f"\nInterpreted as: {plan.description}")
         except Exception as e:
-            print(f"\n⚠ Failed to interpret specification: {e}")
+            print(f"\nFailed to interpret specification: {get_friendly_error_message(e)}")
             print("Falling back to default plan.")
             plan = create_default_plan(buy_list, config)
     
@@ -494,7 +548,7 @@ def main():
         print(f"Please place the file in: {base_path}")
         print("\nRequired columns:")
         print("  - Account Number")
-        print("  - Client Name (optional)")
+        print("  - Account Name (optional, also accepts 'Client Name')")
         print("  - Symbol / CUSIP / ID")
         print("  - Quantity")
         print("  - Price / NAV")
@@ -523,9 +577,7 @@ def main():
         display_account_summary(accounts)
         
     except Exception as e:
-        print(f"Error loading data: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\nError loading data: {get_friendly_error_message(e)}")
         input("\nPress Enter to exit...")
         return
     
@@ -583,8 +635,6 @@ if __name__ == "__main__":
         print("\n\nProgram interrupted. Exiting...")
         sys.exit(0)
     except Exception as e:
-        print(f"\nUnexpected error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\nUnexpected error: {get_friendly_error_message(e)}")
         input("\nPress Enter to exit...")
         sys.exit(1)

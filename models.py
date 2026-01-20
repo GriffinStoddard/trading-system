@@ -89,9 +89,13 @@ class AccountParser:
         """
         df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
         
-        # Check for Client Name column
-        has_client_name = 'Client Name' in df.columns or 'Client name' in df.columns
-        client_name_col = 'Client Name' if 'Client Name' in df.columns else 'Client name'
+        # Check for client/account name column (supports multiple naming conventions)
+        name_col = None
+        for col_name in ['Account Name', 'Client Name', 'Client name', 'account name']:
+            if col_name in df.columns:
+                name_col = col_name
+                break
+        has_client_name = name_col is not None
         
         account_numbers = df['Account Number'].unique()
         
@@ -105,7 +109,7 @@ class AccountParser:
             # Get client name from first row of account data
             client_name = ""
             if has_client_name:
-                first_name = account_data[client_name_col].iloc[0]
+                first_name = account_data[name_col].iloc[0]
                 client_name = str(first_name) if pd.notna(first_name) else ""
             
             account = Account(account_num=account_num_str, client_name=client_name)

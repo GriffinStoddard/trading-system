@@ -25,11 +25,11 @@ A financial advisor tool that uses natural language to generate buy/sell order s
 
 Excel file (reads the first sheet):
 
-| Account Number | Client Name | Symbol / CUSIP / ID | Quantity | Price / NAV | Market Value |
-|----------------|-------------|---------------------|----------|-------------|--------------|
-| 12345 | John Smith | AAPL | 100 | 175.50 | 17550.00 |
-| 12345 | John Smith | CASH | | | 25000.00 |
-| 67890 | Jane Doe | GOOGL | 50 | 140.00 | 7000.00 |
+| Account Name | Account Number | Symbol / CUSIP / ID | Quantity | Price / NAV | Market Value |
+|--------------|----------------|---------------------|----------|-------------|--------------|
+| John Smith | 12345 | AAPL | 100 | 175.50 | 17550.00 |
+| John Smith | 12345 | CASH | | | 25000.00 |
+| Jane Doe | 67890 | GOOGL | 50 | 140.00 | 7000.00 |
 
 ### stock_prices.csv Format
 
