@@ -23,7 +23,7 @@ A financial advisor tool that uses natural language to generate buy/sell order s
 
 ### investment_data.xlsx Format
 
-Excel file with a sheet named "Account holdings":
+Excel file (reads the first sheet):
 
 | Account Number | Client Name | Symbol / CUSIP / ID | Quantity | Price / NAV | Market Value |
 |----------------|-------------|---------------------|----------|-------------|--------------|

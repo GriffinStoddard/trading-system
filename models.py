@@ -80,8 +80,13 @@ class AccountParser:
         self.excel_file_path = excel_file_path
         self.accounts: dict[str, Account] = {}
     
-    def parse_accounts(self, sheet_name: str = 'Account holdings') -> dict[str, Account]:
-        """Parse the Excel file and create Account objects."""
+    def parse_accounts(self, sheet_name=0) -> dict[str, Account]:
+        """Parse the Excel file and create Account objects.
+
+        Args:
+            sheet_name: Sheet to read. Defaults to 0 (first sheet).
+                        Can also pass a string name if needed.
+        """
         df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
         
         # Check for Client Name column

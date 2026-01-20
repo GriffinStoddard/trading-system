@@ -45,7 +45,7 @@ Natural Language → LLM Interpreter → ExecutionPlan (JSON) → Order Generato
 
 ## Data Flow
 
-1. **Input**: `investment_data.xlsx` (Excel with "Account holdings" sheet) + `stock_prices.csv` (buy list)
+1. **Input**: `investment_data.xlsx` (Excel file, reads first sheet) + `stock_prices.csv` (buy list)
 2. **Processing**: User chooses default plan OR enters custom natural language spec
 3. **Output**: Timestamped CSV files (`orders_*_SELL.csv`, `orders_*_BUY.csv`) + `_REPORT.txt`
 
