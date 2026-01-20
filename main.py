@@ -29,7 +29,7 @@ from config import load_config, save_config, get_api_key
 
 
 # Version info
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 
 def get_friendly_error_message(error: Exception) -> str:
