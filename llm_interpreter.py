@@ -14,8 +14,10 @@ from execution_plan import (
 )
 
 
-# System prompt that teaches the LLM about our schema
-SYSTEM_PROMPT = """You are a financial trading assistant that converts natural language trading specifications into structured execution plans.
+def get_system_prompt(cash_equivalents: list[str]) -> str:
+    """Build the system prompt with the current cash equivalents list."""
+    cash_equiv_str = ", ".join(cash_equivalents)
+    return f"""You are a financial trading assistant that converts natural language trading specifications into structured execution plans.
 
 Your job is to interpret an advisor's instructions and output a JSON execution plan that a computer program will execute to generate buy/sell orders.
 
@@ -24,20 +26,20 @@ Your job is to interpret an advisor's instructions and output a JSON execution p
 You must output valid JSON matching this schema:
 
 ```json
-{
+{{
   "description": "Human-readable summary of what was requested",
   "sell_rules": [
-    {
+    {{
       "tickers": ["TICKER1", "TICKER2"],
       "quantity_type": "all|percent_of_position|shares|dollars|to_target",
       "quantity": null or number,
       "priority": "largest_first",
       "min_shares_remaining": null or integer,
       "max_percent_of_position": null or decimal
-    }
+    }}
   ],
   "buy_rules": [
-    {
+    {{
       "tickers": ["TICKER1", "TICKER2"],
       "quantity_type": "percent_of_account|shares|dollars|to_target",
       "quantity": decimal or number,
@@ -46,21 +48,21 @@ You must output valid JSON matching this schema:
       "buy_only_to_target": true|false,
       "cash_source": "available_cash|cash_equivalents",
       "sell_cash_equiv_if_needed": true|false
-    }
+    }}
   ],
-  "account_filter": null or {
+  "account_filter": null or {{
     "min_value": null or number,
     "max_value": null or number,
     "account_numbers": null or ["acc1", "acc2"],
     "must_hold_tickers": null or ["TICK1"]
-  },
-  "cash_management": {
+  }},
+  "cash_management": {{
     "min_cash_percent": decimal (default 0.02 for 2%),
     "min_cash_dollars": null or number,
     "cash_equiv_sell_order": "largest_first"
-  },
+  }},
   "sells_before_buys": true
-}
+}}
 ```
 
 ## QUANTITY TYPES EXPLAINED
@@ -75,7 +77,7 @@ You must output valid JSON matching this schema:
 ## KEY RULES
 
 1. All percentages are expressed as decimals (2.5% = 0.025, 2% = 0.02)
-2. "Cash equivalents" are: BIL, USFR, PJLXX
+2. "Cash equivalents" are: {cash_equiv_str}
 3. When buying to a target allocation and position exists, set `buy_only_to_target: true`
 4. When told to maintain X% cash, set `min_cash_percent` to that value
 5. When told to sell cash equivalents if needed, set `sell_cash_equiv_if_needed: true`
@@ -86,11 +88,11 @@ You must output valid JSON matching this schema:
 ### Example 1: "Buy 2.5% of each ticker, skip if already own 2% or more, sell cash equivalents if needed, keep 2% cash"
 
 ```json
-{
+{{
   "description": "Buy to 2.5% allocation per ticker, skip existing positions >= 2%, liquidate cash equivalents if needed, maintain 2% cash floor",
   "sell_rules": [],
   "buy_rules": [
-    {
+    {{
       "tickers": ["PYPL", "MU", "GOOGL"],
       "quantity_type": "percent_of_account",
       "quantity": 0.025,
@@ -99,35 +101,35 @@ You must output valid JSON matching this schema:
       "buy_only_to_target": true,
       "cash_source": "cash_equivalents",
       "sell_cash_equiv_if_needed": true
-    }
+    }}
   ],
   "account_filter": null,
-  "cash_management": {
+  "cash_management": {{
     "min_cash_percent": 0.02,
     "min_cash_dollars": null,
     "cash_equiv_sell_order": "largest_first"
-  },
+  }},
   "sells_before_buys": true
-}
+}}
 ```
 
 ### Example 2: "Sell all LUMN and COMM, buy equal amounts of GOOGL and CSCO with proceeds"
 
 ```json
-{
+{{
   "description": "Liquidate LUMN and COMM positions, reinvest proceeds equally into GOOGL and CSCO",
   "sell_rules": [
-    {
+    {{
       "tickers": ["LUMN", "COMM"],
       "quantity_type": "all",
       "quantity": null,
       "priority": "largest_first",
       "min_shares_remaining": null,
       "max_percent_of_position": null
-    }
+    }}
   ],
   "buy_rules": [
-    {
+    {{
       "tickers": ["GOOGL", "CSCO"],
       "quantity_type": "percent_of_account",
       "quantity": 0.025,
@@ -136,47 +138,47 @@ You must output valid JSON matching this schema:
       "buy_only_to_target": false,
       "cash_source": "available_cash",
       "sell_cash_equiv_if_needed": false
-    }
+    }}
   ],
   "account_filter": null,
-  "cash_management": {
+  "cash_management": {{
     "min_cash_percent": 0.02,
     "min_cash_dollars": null,
     "cash_equiv_sell_order": "largest_first"
-  },
+  }},
   "sells_before_buys": true
-}
+}}
 ```
 
 ### Example 3: "Raise $150k proportionally, don't sell below 50 shares, max 25% of any position, skip accounts under $25k"
 
 ```json
-{
+{{
   "description": "Raise $150,000 cash by selling proportionally from largest positions, minimum 50 shares remaining, max 25% per position, skip small accounts",
   "sell_rules": [
-    {
+    {{
       "tickers": ["*"],
       "quantity_type": "dollars",
       "quantity": 150000,
       "priority": "largest_first",
       "min_shares_remaining": 50,
       "max_percent_of_position": 0.25
-    }
+    }}
   ],
   "buy_rules": [],
-  "account_filter": {
+  "account_filter": {{
     "min_value": 25000,
     "max_value": null,
     "account_numbers": null,
     "must_hold_tickers": null
-  },
-  "cash_management": {
+  }},
+  "cash_management": {{
     "min_cash_percent": 0.02,
     "min_cash_dollars": null,
     "cash_equiv_sell_order": "largest_first"
-  },
+  }},
   "sells_before_buys": true
-}
+}}
 ```
 
 Output ONLY the JSON, no explanation or markdown formatting.
@@ -235,8 +237,10 @@ class LLMInterpreter:
         
         if not self.api_key:
             print("Warning: No API key found. Check config.json or set ANTHROPIC_API_KEY.")
-        
-        self.cash_equivalents = ["BIL", "USFR", "PJLXX"]
+
+        # Load cash equivalents from config
+        from config import get_cash_equivalents
+        self.cash_equivalents = get_cash_equivalents()
     
     def interpret(
         self,
@@ -289,7 +293,7 @@ class LLMInterpreter:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                system=get_system_prompt(self.cash_equivalents),
                 messages=[
                     {"role": "user", "content": user_message}
                 ]
@@ -393,16 +397,252 @@ def interpret_specification(
 ) -> ExecutionPlan:
     """
     Convenience function to interpret a specification.
-    
+
     Args:
         specification: Natural language trading specification
         accounts: Dictionary of Account objects
         buy_list: List of tickers to buy
         stock_prices: Dictionary of ticker prices
         api_key: Optional API key (uses env var if not provided)
-        
+
     Returns:
         ExecutionPlan ready for execution
     """
     interpreter = LLMInterpreter(api_key)
     return interpreter.interpret(specification, accounts, buy_list, stock_prices)
+
+
+# Conversation-aware prompts for v2.0
+
+INTENT_DETECTION_PROMPT = """Classify this user message into one of these categories:
+- QUESTION: Asking about how the program works, what it can do, explaining concepts
+- TRADE_REQUEST: Requesting to generate trades, buy/sell orders, rebalancing
+- CLARIFICATION_RESPONSE: Answering a question you previously asked them
+- COMMAND: System commands like help, exit, settings, view holdings
+- CONFIRMATION: Yes/no response to a confirmation prompt
+- UNCLEAR: Ambiguous, needs clarification
+
+Message: {message}
+Recent context: {context}
+
+Respond with just the category name."""
+
+
+TRADE_CLARIFICATION_PROMPT = """You are a trading assistant helping to clarify a trade request.
+
+The user wants to generate trades. Based on their message, identify what information is missing
+to create a complete trade specification.
+
+Possible missing information:
+- Target allocation percentage (e.g., 2.5% per stock)
+- Skip threshold (skip if already own X% or more)
+- Whether to sell cash equivalents to fund buys
+- Specific tickers to buy or sell
+- Dollar amounts or share counts
+
+User's message: {message}
+
+Current portfolio context:
+{portfolio_summary}
+
+Buy list: {buy_list}
+
+Respond in JSON format:
+{{
+    "understood": {{
+        "action": "buy" or "sell" or "both",
+        "target_allocation": null or decimal,
+        "skip_threshold": null or decimal,
+        "sell_cash_equiv": null or boolean,
+        "tickers": null or list,
+        "dollar_amount": null or number
+    }},
+    "missing": ["list of missing required fields"],
+    "clarification_questions": ["natural language questions to ask"]
+}}"""
+
+
+class ConversationalInterpreter(LLMInterpreter):
+    """
+    Extended interpreter with conversation support for v2.0.
+
+    Handles multi-turn dialogue and clarification flows.
+    """
+
+    def __init__(self, api_key: Optional[str] = None):
+        super().__init__(api_key)
+        self.conversation_history: list[dict] = []
+
+    def detect_intent(self, message: str, context: str = "") -> str:
+        """
+        Detect the intent of a user message.
+
+        Args:
+            message: User's message
+            context: Recent conversation context
+
+        Returns:
+            Intent category string
+        """
+        if not self.api_key:
+            return self._detect_intent_simple(message)
+
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=self.api_key)
+
+            prompt = INTENT_DETECTION_PROMPT.format(
+                message=message,
+                context=context or "No prior context"
+            )
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=50,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            return response.content[0].text.strip().upper()
+
+        except Exception:
+            return self._detect_intent_simple(message)
+
+    def _detect_intent_simple(self, message: str) -> str:
+        """Simple rule-based intent detection fallback."""
+        lower = message.lower()
+
+        # Commands
+        if any(cmd in lower for cmd in ['exit', 'quit', 'help', 'holdings', 'summary']):
+            return "COMMAND"
+
+        # Questions
+        if any(q in lower for q in ['how', 'what', 'why', 'when', '?']):
+            return "QUESTION"
+
+        # Trade requests
+        if any(t in lower for t in ['buy', 'sell', 'trade', 'order', 'default']):
+            return "TRADE_REQUEST"
+
+        # Confirmations
+        if lower in ['yes', 'no', 'y', 'n', 'ok', 'cancel']:
+            return "CONFIRMATION"
+
+        return "UNCLEAR"
+
+    def analyze_trade_request(
+        self,
+        message: str,
+        accounts: dict,
+        buy_list: list[str],
+        stock_prices: dict[str, float]
+    ) -> dict:
+        """
+        Analyze a trade request and identify missing information.
+
+        Args:
+            message: User's trade request
+            accounts: Account data
+            buy_list: Available tickers to buy
+            stock_prices: Ticker prices
+
+        Returns:
+            Dictionary with understood info and missing fields
+        """
+        if not self.api_key:
+            return self._analyze_simple(message)
+
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=self.api_key)
+
+            portfolio_summary = self._build_accounts_summary(accounts)
+
+            prompt = TRADE_CLARIFICATION_PROMPT.format(
+                message=message,
+                portfolio_summary=portfolio_summary,
+                buy_list=", ".join(buy_list) if buy_list else "None"
+            )
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Strip markdown code blocks if present
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+            return json.loads(response_text)
+
+        except Exception as e:
+            return self._analyze_simple(message)
+
+    def _analyze_simple(self, message: str) -> dict:
+        """Simple rule-based trade request analysis."""
+        import re
+        lower = message.lower()
+
+        result = {
+            "understood": {
+                "action": "buy" if "buy" in lower else ("sell" if "sell" in lower else "buy"),
+                "target_allocation": None,
+                "skip_threshold": None,
+                "sell_cash_equiv": None,
+                "tickers": None,
+                "dollar_amount": None
+            },
+            "missing": [],
+            "clarification_questions": []
+        }
+
+        # Extract percentages
+        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', message)
+        if pct_match:
+            pct = float(pct_match.group(1)) / 100
+            if 'target' in lower or 'allocation' in lower:
+                result["understood"]["target_allocation"] = pct
+            elif 'skip' in lower:
+                result["understood"]["skip_threshold"] = pct
+
+        # Check for cash equivalent selling
+        if 'cash equiv' in lower or 'sell cash' in lower:
+            result["understood"]["sell_cash_equiv"] = True
+
+        # Identify missing info
+        if result["understood"]["action"] == "buy":
+            if not result["understood"]["target_allocation"]:
+                result["missing"].append("target_allocation")
+                result["clarification_questions"].append(
+                    "What target allocation per stock? (e.g., 2.5% of account value)"
+                )
+
+        return result
+
+    def interpret_with_conversation(
+        self,
+        specification: str,
+        accounts: dict,
+        buy_list: list[str],
+        stock_prices: dict[str, float],
+        conversation_history: list[dict] = None
+    ) -> ExecutionPlan:
+        """
+        Interpret a specification with full conversation context.
+
+        Args:
+            specification: The trade specification
+            accounts: Account data
+            buy_list: Tickers to buy
+            stock_prices: Current prices
+            conversation_history: Previous conversation turns
+
+        Returns:
+            ExecutionPlan ready for execution
+        """
+        # For now, delegate to the base interpret method
+        # Future enhancement: include conversation history for better understanding
+        return self.interpret(specification, accounts, buy_list, stock_prices)

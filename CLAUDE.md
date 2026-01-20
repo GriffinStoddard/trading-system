@@ -56,7 +56,7 @@ Natural Language → LLM Interpreter → ExecutionPlan (JSON) → Order Generato
 
 ## Configuration
 
-Cash equivalents are configurable in `config.json` (default: BIL, USFR, PJLXX). These are treated as liquid cash sources that can be sold to fund buy orders.
+Cash equivalents are configurable in `config.json` (default: BIL, USFR, PJLXX, JAAA). These are treated as liquid cash sources that can be sold to fund buy orders.
 
 ## Dependencies
 

@@ -29,7 +29,7 @@ from config import load_config, save_config, get_api_key
 
 
 # Version info
-VERSION = "1.0.5"
+VERSION = "2.0.0"
 
 
 def get_friendly_error_message(error: Exception) -> str:
@@ -288,13 +288,11 @@ def export_orders(
 ) -> tuple[str, str]:
     """Export orders to CSV files."""
     base_path = get_base_path()
-    
-    if output_prefix is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_prefix = f"orders_{timestamp}"
-    
-    sell_filename = f"{output_prefix}_SELL.csv"
-    buy_filename = f"{output_prefix}_BUY.csv"
+
+    date_str = datetime.now().strftime("%m-%d-%Y")
+
+    sell_filename = f"sell_order_{date_str}.csv"
+    buy_filename = f"buy_order_{date_str}.csv"
     
     sell_path = base_path / sell_filename
     buy_path = base_path / buy_filename
@@ -405,7 +403,8 @@ def run_trade_workflow(accounts: dict, stock_prices: dict[str, float], buy_list:
     
     # Also save report to file
     base_path = get_base_path()
-    report_file = sell_file.replace("_SELL.csv", "_REPORT.txt")
+    date_str = datetime.now().strftime("%m-%d-%Y")
+    report_file = f"trade_report_{date_str}.txt"
     report_path = base_path / report_file
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
@@ -531,17 +530,17 @@ def configure_api_key():
 
 
 def main():
-    """Main program entry point."""
+    """Main program entry point - v2.0 Conversational Mode."""
     display_header()
-    
+
     # Load configuration
     config = load_config()
     excel_file = config.get("default_excel_file", "investment_data.xlsx")
     prices_file = config.get("default_prices_file", "stock_prices.csv")
-    
+
     base_path = get_base_path()
     excel_path = base_path / excel_file
-    
+
     # Check for Excel file
     if not excel_path.exists():
         print(f"\nError: Investment data file '{excel_file}' not found.")
@@ -555,32 +554,160 @@ def main():
         print("  - Market Value")
         input("\nPress Enter to exit...")
         return
-    
+
     try:
         # Parse accounts
         print(f"\nLoading data from: {excel_file}")
         parser = AccountParser(str(excel_path))
         accounts = parser.parse_accounts()
-        
+
         if not accounts:
             print("Error: No accounts found in the Excel file.")
             input("\nPress Enter to exit...")
             return
-        
+
         print(f"Successfully loaded {len(accounts)} account(s)")
-        
+
         # Load prices
         stock_prices, buy_list = load_stock_prices(prices_file)
         print(f"Loaded {len(stock_prices)} stock prices from {prices_file}")
-        
-        # Display initial summary
-        display_account_summary(accounts)
-        
+
     except Exception as e:
         print(f"\nError loading data: {get_friendly_error_message(e)}")
         input("\nPress Enter to exit...")
         return
-    
+
+    # Check for API key - required for AI agent mode
+    from config import get_api_key, set_api_key
+    api_key = get_api_key()
+
+    if not api_key:
+        print("\n" + "=" * 70)
+        print("   API KEY REQUIRED")
+        print("=" * 70)
+        print("\nThis program requires an Anthropic API key to function.")
+        print("You can get one from: https://console.anthropic.com/")
+        print("\nEnter your API key (or 'exit' to quit):")
+
+        while not api_key:
+            key_input = input("> ").strip()
+
+            if key_input.lower() in ['exit', 'quit', 'q']:
+                print("\nExiting. Goodbye!")
+                return
+
+            if len(key_input) < 20:
+                print("That doesn't look like a valid API key. Please try again:")
+                continue
+
+            # Try to validate the key by making a simple API call
+            print("Validating API key...")
+            try:
+                import anthropic
+            except ImportError:
+                print("Error: anthropic package not installed. Run: pip install anthropic")
+                return
+
+            try:
+                client = anthropic.Anthropic(api_key=key_input)
+                # Make a minimal API call to validate
+                client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=10,
+                    messages=[{"role": "user", "content": "Hi"}]
+                )
+                api_key = key_input
+                set_api_key(api_key)
+                print("API key validated and saved!")
+            except anthropic.AuthenticationError:
+                print("Invalid API key. Please check and try again:")
+            except Exception as e:
+                print(f"Error validating key: {e}")
+                print("Please try again:")
+
+    # Initialize conversational agent
+    from conversation_agent import ConversationAgent
+    agent = ConversationAgent(accounts, stock_prices, buy_list, config)
+    agent.api_key = api_key  # Ensure agent has the key
+
+    # Set up export callback
+    agent.export_orders_callback = export_orders
+
+    # Welcome message
+    print(agent.get_welcome_message())
+
+    # Conversation loop
+    while True:
+        try:
+            print()  # Blank line before prompt
+            user_input = input("You: ").strip()
+            if not user_input:
+                continue
+
+            print("\nProcessing...")
+            response = agent.chat(user_input)
+            print(f"\nAssistant: {response}")
+
+            if agent.should_exit:
+                break
+
+        except EOFError:
+            # Handle Ctrl+D
+            print("\n\nExiting. Goodbye!")
+            break
+
+
+def main_menu_mode():
+    """Legacy menu-driven mode (v1.x compatibility)."""
+    display_header()
+
+    # Load configuration
+    config = load_config()
+    excel_file = config.get("default_excel_file", "investment_data.xlsx")
+    prices_file = config.get("default_prices_file", "stock_prices.csv")
+
+    base_path = get_base_path()
+    excel_path = base_path / excel_file
+
+    # Check for Excel file
+    if not excel_path.exists():
+        print(f"\nError: Investment data file '{excel_file}' not found.")
+        print(f"Please place the file in: {base_path}")
+        print("\nRequired columns:")
+        print("  - Account Number")
+        print("  - Account Name (optional, also accepts 'Client Name')")
+        print("  - Symbol / CUSIP / ID")
+        print("  - Quantity")
+        print("  - Price / NAV")
+        print("  - Market Value")
+        input("\nPress Enter to exit...")
+        return
+
+    try:
+        # Parse accounts
+        print(f"\nLoading data from: {excel_file}")
+        parser = AccountParser(str(excel_path))
+        accounts = parser.parse_accounts()
+
+        if not accounts:
+            print("Error: No accounts found in the Excel file.")
+            input("\nPress Enter to exit...")
+            return
+
+        print(f"Successfully loaded {len(accounts)} account(s)")
+
+        # Load prices
+        stock_prices, buy_list = load_stock_prices(prices_file)
+        print(f"Loaded {len(stock_prices)} stock prices from {prices_file}")
+
+        # Display initial summary
+        display_account_summary(accounts)
+
+    except Exception as e:
+        print(f"\nError loading data: {get_friendly_error_message(e)}")
+        input("\nPress Enter to exit...")
+        return
+
     # Main menu loop
     while True:
         print("\n" + "-" * 80)
@@ -593,37 +720,37 @@ def main():
         print("5. Settings - Configure API key")
         print("6. Exit")
         print("-" * 80)
-        
+
         action = input("Select option (1-6): ").strip()
-        
+
         if action == '1':
             # Reload prices in case they changed
             stock_prices, buy_list = load_stock_prices(prices_file)
             if not buy_list:
-                print("\n⚠ No stocks in buy list. Add stocks via 'Prices' menu first.")
+                print("\n! No stocks in buy list. Add stocks via 'Prices' menu first.")
                 continue
             run_trade_workflow(accounts, stock_prices, buy_list, config)
-        
+
         elif action == '2':
             display_detailed_holdings(accounts)
-        
+
         elif action == '3':
             manage_prices_menu(prices_file)
             # Reload after changes
             stock_prices, buy_list = load_stock_prices(prices_file)
-        
+
         elif action == '4':
             display_account_summary(accounts)
-        
+
         elif action == '5':
             configure_api_key()
             # Reload config
             config = load_config()
-        
+
         elif action == '6':
             print("\nExiting. Goodbye!")
             break
-        
+
         else:
             print("Invalid option. Please select 1-6.")
 

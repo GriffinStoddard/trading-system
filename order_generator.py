@@ -338,7 +338,7 @@ class OrderGenerator:
                     shares_to_trade=0,
                     estimated_value=0,
                     new_allocation=current_alloc,
-                    reason=f"Already at {current_alloc*100:.2f}% (skip threshold: {rule.skip_if_allocation_above*100:.1f}%)"
+                    reason=f"Already owns >= {rule.skip_if_allocation_above*100:.1f}%"
                 ))
                 continue
             
@@ -370,6 +370,22 @@ class OrderGenerator:
                 target_alloc = current_alloc
             
             if shares_to_buy <= 0:
+                # Determine the actual reason for no shares to buy
+                if rule.quantity_type == QuantityType.PERCENT_OF_ACCOUNT:
+                    target_value = total_value * (rule.quantity or 0)
+                    if rule.buy_only_to_target:
+                        value_to_buy = max(0, target_value - current_value)
+                    else:
+                        value_to_buy = target_value
+
+                    if price > value_to_buy and current_alloc < target_alloc:
+                        # Share price exceeds what we want to buy
+                        reason = "Share price exceeds target"
+                    else:
+                        reason = "Already at target allocation"
+                else:
+                    reason = "No shares to buy"
+
                 analysis.ticker_analysis.append(TickerAnalysis(
                     ticker=ticker,
                     current_shares=current_shares,
@@ -380,7 +396,7 @@ class OrderGenerator:
                     shares_to_trade=0,
                     estimated_value=0,
                     new_allocation=current_alloc,
-                    reason="No shares to buy (already at or above target)"
+                    reason=reason
                 ))
                 continue
             

@@ -25,10 +25,7 @@ class Account:
     holdings: list = field(default_factory=list)
     cash: float = 0.0
     cash_equivalents: list = field(default_factory=list)
-    
-    # Cash equivalent symbols
-    CASH_EQUIV_SYMBOLS = {'BIL', 'USFR', 'PJLXX'}
-    
+
     def add_holding(self, holding: Holding):
         self.holdings.append(holding)
     
@@ -73,12 +70,13 @@ class Account:
 
 class AccountParser:
     """Parser to read Excel files and create Account objects."""
-    
-    CASH_EQUIVALENTS = {'BIL', 'USFR', 'PJLXX'}
-    
+
     def __init__(self, excel_file_path: str):
         self.excel_file_path = excel_file_path
         self.accounts: dict[str, Account] = {}
+        # Load cash equivalents from config
+        from config import get_cash_equivalents
+        self.cash_equivalents = set(get_cash_equivalents())
     
     def parse_accounts(self, sheet_name=0) -> dict[str, Account]:
         """Parse the Excel file and create Account objects.
@@ -134,7 +132,7 @@ class AccountParser:
                     
                     holding = Holding(symbol_str, shares, price_val, mv)
                     
-                    if symbol_str in self.CASH_EQUIVALENTS:
+                    if symbol_str in self.cash_equivalents:
                         account.add_cash_equivalent(holding)
                     else:
                         account.add_holding(holding)

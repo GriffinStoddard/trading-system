@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     "anthropic_api_key": "",
     "default_excel_file": "investment_data.xlsx",
     "default_prices_file": "stock_prices.csv",
-    "cash_equivalents": ["BIL", "USFR", "PJLXX"],
+    "cash_equivalents": ["BIL", "USFR", "PJLXX", "JAAA"],
     "default_cash_floor_percent": 0.02,
     "default_target_allocation_percent": 0.025,
     "default_skip_if_above_percent": 0.02
@@ -86,6 +86,12 @@ def set_api_key(api_key: str) -> bool:
     config = load_config()
     config["anthropic_api_key"] = api_key
     return save_config(config)
+
+
+def get_cash_equivalents() -> list[str]:
+    """Get the list of cash equivalent tickers from config."""
+    config = load_config()
+    return config.get("cash_equivalents", DEFAULT_CONFIG["cash_equivalents"])
 
 
 # Need sys for frozen check

@@ -137,7 +137,7 @@ class TestLoadConfig:
             assert config["anthropic_api_key"] == "my-key"
             # Should have merged defaults for missing keys
             assert config["default_excel_file"] == "investment_data.xlsx"
-            assert config["cash_equivalents"] == ["BIL", "USFR", "PJLXX"]
+            assert config["cash_equivalents"] == ["BIL", "USFR", "PJLXX", "JAAA"]
 
     def test_load_config_empty_file_uses_defaults(self):
         """Empty config file uses defaults."""
