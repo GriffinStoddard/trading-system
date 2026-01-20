@@ -28,20 +28,15 @@ jobs:
       run: |
         pyinstaller --onefile --console --name TradingSystem main.py
     
-    - name: Create sample config
+    - name: Copy config files
       run: |
-        echo '{"anthropic_api_key": "", "default_excel_file": "investment_data.xlsx", "default_prices_file": "stock_prices.csv", "cash_equivalents": ["BIL", "USFR", "PJLXX"], "default_cash_floor_percent": 0.02, "default_target_allocation_percent": 0.025, "default_skip_if_above_percent": 0.02}' > dist/config.json.example
-    
-    - name: Create sample prices file
-      run: |
-        echo "TICKER,PRICE" > dist/stock_prices.csv.example
-        echo "AAPL,175.00" >> dist/stock_prices.csv.example
-        echo "GOOGL,140.00" >> dist/stock_prices.csv.example
-    
+        copy config.json dist\config.json
+        copy stock_prices.csv dist\stock_prices.csv
+
     - name: Package release
       run: |
         cd dist
-        Compress-Archive -Path TradingSystem.exe, config.json.example, stock_prices.csv.example -DestinationPath TradingSystem-${{ github.ref_name }}-windows.zip
+        Compress-Archive -Path TradingSystem.exe, config.json, stock_prices.csv -DestinationPath TradingSystem-${{ github.ref_name }}-windows.zip
     
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
