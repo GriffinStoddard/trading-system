@@ -52,7 +52,7 @@ class TestSystemKnowledge:
     def test_welcome_message_exists(self):
         """Verify welcome message is not empty."""
         assert len(WELCOME_MESSAGE) > 50
-        assert "2.0.0" in WELCOME_MESSAGE
+        assert "2.1.0" in WELCOME_MESSAGE
 
     def test_system_knowledge_contains_key_concepts(self):
         """Verify system knowledge covers key concepts."""
@@ -110,7 +110,7 @@ class TestConversationAgentSetup:
     def test_get_welcome_message(self, agent):
         """Test welcome message is returned."""
         welcome = agent.get_welcome_message()
-        assert "2.0.0" in welcome
+        assert "2.1.0" in welcome
         assert "Conversational" in welcome
 
 
@@ -249,47 +249,6 @@ class TestQuestionHandling:
         context = agent._build_portfolio_context()
         assert "12345" in context
         assert "10,000" in context or "10000" in context
-
-
-class TestTradeInfoExtraction:
-    """Test trade information extraction from messages."""
-
-    @pytest.fixture
-    def agent(self):
-        """Create agent for extraction testing."""
-        account = Account(account_num="12345")
-        account.cash = 50000.0
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0},
-            ["GOOGL"],
-            {}
-        )
-
-    def test_extract_target_allocation(self, agent):
-        """Test extracting target allocation percentage."""
-        info = agent._extract_trade_info("buy to 2.5% target allocation")
-        assert info.get("target_allocation") == 0.025
-
-    def test_extract_dollar_amount(self, agent):
-        """Test extracting dollar amount."""
-        info = agent._extract_trade_info("buy $5,000 of GOOGL")
-        assert info.get("dollar_amount") == 5000.0
-
-    def test_extract_action_buy(self, agent):
-        """Test extracting buy action."""
-        info = agent._extract_trade_info("buy the stocks on my list")
-        assert info.get("action") == "buy"
-
-    def test_extract_action_sell(self, agent):
-        """Test extracting sell action."""
-        info = agent._extract_trade_info("sell all LUMN")
-        assert info.get("action") == "sell"
-
-    def test_extract_cash_equiv_selling(self, agent):
-        """Test extracting cash equivalent selling preference."""
-        info = agent._extract_trade_info("sell cash equivalents if needed")
-        assert info.get("sell_cash_equiv") is True
 
 
 class TestConversationFlow:

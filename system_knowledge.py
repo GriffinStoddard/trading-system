@@ -40,6 +40,11 @@ predictable, auditable code - ensuring reproducibility.
 - Sell by share count ("sell 100 shares")
 - Sell cash equivalents to fund buys (automatic when configured)
 
+**Conditional Sell-Then-Buy:**
+- Sell a stock and buy another with proceeds, only for accounts that sold
+- Example: "Sell all GOOGL, then buy AAPL with the proceeds for accounts that sold GOOGL"
+- The buy will only execute for accounts that actually had GOOGL to sell
+
 **Account Filtering:**
 - Filter by account value (min/max)
 - Filter by specific account numbers
@@ -157,7 +162,7 @@ Just tell me what you'd like to do in plain English!
 
 WELCOME_MESSAGE = """
 ================================================================================
-   TRADING SYSTEM v2.0.0 - Conversational Mode
+   TRADING SYSTEM v2.1.0 - Conversational Mode
 ================================================================================
 
 Hello! I'm your trading assistant. I can help you:

@@ -84,19 +84,23 @@ class OrderGenerator:
     def execute_plan(self, plan: ExecutionPlan) -> tuple[list[Order], list[Order]]:
         """
         Execute an execution plan and generate orders.
-        
+
         Returns:
             Tuple of (sell_orders, buy_orders)
         """
         all_sell_orders = []
         all_buy_orders = []
         self.analyses = []
-        
+
+        # Track which accounts sold which tickers and how much cash was generated
+        # Format: {account_num: {ticker: cash_generated}}
+        accounts_sell_info: dict[str, dict[str, float]] = {}
+
         for account_num, account in self.accounts.items():
             # Check account filter
             if not self._passes_filter(account, plan.account_filter):
                 continue
-            
+
             # Create analysis object
             analysis = AccountTradeAnalysis(
                 account_num=account_num,
@@ -109,25 +113,56 @@ class OrderGenerator:
                     for h in account.holdings
                 ]
             )
-            
+
             # Track available cash through the process
             available_cash = account.cash
-            
+            accounts_sell_info[account_num] = {}
+
             # Process sell rules first (if sells_before_buys)
             if plan.sells_before_buys:
                 for sell_rule in plan.sell_rules:
-                    orders, cash_generated = self._process_sell_rule(
+                    orders, cash_generated, tickers_sold = self._process_sell_rule(
                         account, sell_rule, analysis
                     )
                     all_sell_orders.extend(orders)
                     analysis.sell_orders.extend(orders)
                     analysis.cash_from_sells += cash_generated
                     available_cash += cash_generated
-            
+                    # Track which tickers were sold and cash generated per ticker
+                    for ticker, cash in tickers_sold.items():
+                        accounts_sell_info[account_num][ticker] = cash
+
             # Process buy rules
             for buy_rule in plan.buy_rules:
+                # Check if this buy rule is conditional on selling specific tickers
+                if buy_rule.buy_only_if_sold:
+                    required_sold = {t.upper() for t in buy_rule.buy_only_if_sold}
+                    actual_sold = set(accounts_sell_info.get(account_num, {}).keys())
+                    if not required_sold.intersection(actual_sold):
+                        # This account didn't sell any of the required tickers, skip
+                        continue
+
+                # Calculate cash available for this buy rule
+                # Only use proceeds mode when BOTH flags are properly set
+                use_proceeds_mode = (
+                    buy_rule.use_proceeds_from_sale
+                    and buy_rule.buy_only_if_sold
+                    and len(buy_rule.buy_only_if_sold) > 0
+                )
+
+                if use_proceeds_mode:
+                    # Use only the proceeds from the sale of specified tickers
+                    proceeds = sum(
+                        accounts_sell_info.get(account_num, {}).get(t.upper(), 0)
+                        for t in buy_rule.buy_only_if_sold
+                    )
+                    buy_cash = proceeds
+                else:
+                    buy_cash = available_cash
+
                 orders, cash_used, ce_sell_orders = self._process_buy_rule(
-                    account, buy_rule, available_cash, plan.cash_management, analysis
+                    account, buy_rule, buy_cash, plan.cash_management, analysis,
+                    use_proceeds_only=use_proceeds_mode
                 )
                 all_buy_orders.extend(orders)
                 all_sell_orders.extend(ce_sell_orders)
@@ -136,16 +171,16 @@ class OrderGenerator:
                 analysis.cash_used_for_buys += cash_used
                 analysis.cash_from_sells += sum(o.estimated_value for o in ce_sell_orders)
                 available_cash -= cash_used
-            
+
             # Calculate final cash position
             analysis.cash_after = (
-                analysis.cash_before 
-                + analysis.cash_from_sells 
+                analysis.cash_before
+                + analysis.cash_from_sells
                 - analysis.cash_used_for_buys
             )
-            
+
             self.analyses.append(analysis)
-        
+
         return all_sell_orders, all_buy_orders
     
     def _passes_filter(self, account: Account, filter_obj) -> bool:
@@ -170,15 +205,20 @@ class OrderGenerator:
         return True
     
     def _process_sell_rule(
-        self, 
-        account: Account, 
+        self,
+        account: Account,
         rule: SellRule,
         analysis: AccountTradeAnalysis
-    ) -> tuple[list[Order], float]:
-        """Process a sell rule for an account."""
+    ) -> tuple[list[Order], float, dict[str, float]]:
+        """Process a sell rule for an account.
+
+        Returns:
+            Tuple of (orders, total_cash_generated, {ticker: cash_generated})
+        """
         orders = []
         cash_generated = 0.0
-        
+        tickers_sold: dict[str, float] = {}
+
         for ticker in rule.tickers:
             ticker = ticker.upper()
             
@@ -214,7 +254,8 @@ class OrderGenerator:
             )
             orders.append(order)
             cash_generated += estimated_value
-            
+            tickers_sold[ticker] = estimated_value
+
             # Add to analysis
             current_alloc = (holding.market_value or 0) / account.get_total_value()
             remaining_value = (holding.shares - shares_to_sell) * price
@@ -232,8 +273,8 @@ class OrderGenerator:
                 new_allocation=new_alloc,
                 reason=f"Selling {rule.quantity_type.value}"
             ))
-        
-        return orders, cash_generated
+
+        return orders, cash_generated, tickers_sold
     
     def _calculate_sell_shares(
         self, 
@@ -280,22 +321,31 @@ class OrderGenerator:
         rule: BuyRule,
         available_cash: float,
         cash_mgmt,
-        analysis: AccountTradeAnalysis
+        analysis: AccountTradeAnalysis,
+        use_proceeds_only: bool = False
     ) -> tuple[list[Order], float, list[Order]]:
         """
         Process a buy rule for an account.
-        
+
+        Args:
+            use_proceeds_only: If True, use all available_cash without target allocation calc
+
         Returns:
             Tuple of (buy_orders, cash_used, cash_equiv_sell_orders)
         """
         buy_orders = []
         ce_sell_orders = []
         total_cash_used = 0.0
-        
+
         total_value = account.get_total_value()
-        min_cash_required = total_value * cash_mgmt.min_cash_percent
-        if cash_mgmt.min_cash_dollars:
-            min_cash_required = max(min_cash_required, cash_mgmt.min_cash_dollars)
+
+        # When using proceeds only, don't enforce cash floor on the proceeds
+        if use_proceeds_only:
+            min_cash_required = 0
+        else:
+            min_cash_required = total_value * cash_mgmt.min_cash_percent
+            if cash_mgmt.min_cash_dollars:
+                min_cash_required = max(min_cash_required, cash_mgmt.min_cash_dollars)
         
         # Calculate what we need to buy for each ticker
         buy_needs = []  # [(ticker, shares_to_buy, cost, reason)]
@@ -326,8 +376,8 @@ class OrderGenerator:
             current_value = current_holding.market_value if current_holding else 0
             current_alloc = current_value / total_value if total_value > 0 else 0
             
-            # Check skip condition
-            if rule.skip_if_allocation_above and current_alloc >= rule.skip_if_allocation_above:
+            # Check skip condition (skip this check if using proceeds only)
+            if not use_proceeds_only and rule.skip_if_allocation_above and current_alloc >= rule.skip_if_allocation_above:
                 analysis.ticker_analysis.append(TickerAnalysis(
                     ticker=ticker,
                     current_shares=current_shares,
@@ -341,7 +391,35 @@ class OrderGenerator:
                     reason=f"Already owns >= {rule.skip_if_allocation_above*100:.1f}%"
                 ))
                 continue
-            
+
+            # If using proceeds only, calculate based on available cash divided among tickers
+            if use_proceeds_only:
+                # Split available cash equally among all tickers in the rule
+                num_tickers = len(rule.tickers)
+                if num_tickers == 0 or available_cash <= 0:
+                    continue
+                cash_per_ticker = available_cash / num_tickers
+                value_to_buy = cash_per_ticker
+                shares_to_buy = math.floor(value_to_buy / price) if price > 0 else 0
+                if shares_to_buy <= 0:
+                    analysis.ticker_analysis.append(TickerAnalysis(
+                        ticker=ticker,
+                        current_shares=current_shares,
+                        current_value=current_value,
+                        current_allocation=current_alloc,
+                        target_allocation=None,
+                        action="SKIP",
+                        shares_to_trade=0,
+                        estimated_value=0,
+                        new_allocation=current_alloc,
+                        reason="Insufficient proceeds"
+                    ))
+                    continue
+                cost = shares_to_buy * price
+                target_alloc = (current_value + cost) / total_value if total_value > 0 else 0
+                buy_needs.append((ticker, shares_to_buy, cost, current_shares, current_value, current_alloc, target_alloc))
+                continue
+
             # Calculate target
             if rule.quantity_type == QuantityType.PERCENT_OF_ACCOUNT:
                 target_alloc = rule.quantity or 0

@@ -46,6 +46,8 @@ You must output valid JSON matching this schema:
       "allocation_method": "equal_weight|proportional|specified",
       "skip_if_allocation_above": null or decimal,
       "buy_only_to_target": true|false,
+      "buy_only_if_sold": null or ["TICKER1"],
+      "use_proceeds_from_sale": true|false,
       "cash_source": "available_cash|cash_equivalents",
       "sell_cash_equiv_if_needed": true|false
     }}
@@ -82,6 +84,17 @@ You must output valid JSON matching this schema:
 4. When told to maintain X% cash, set `min_cash_percent` to that value
 5. When told to sell cash equivalents if needed, set `sell_cash_equiv_if_needed: true`
 6. Always set `sells_before_buys: true` unless explicitly told otherwise
+
+## CONDITIONAL SELL-THEN-BUY
+
+When the user wants to sell a stock and then buy another stock ONLY for accounts that sold:
+- Set `buy_only_if_sold: ["TICKER"]` on the buy rule - this ensures the buy only executes for accounts that actually sold that ticker
+- Set `use_proceeds_from_sale: true` if the user wants to use the proceeds from the sale (not a target allocation)
+- The tickers in `buy_only_if_sold` must match tickers in a sell rule
+
+Example: "Sell GOOGL, then buy AAPL with the proceeds for accounts that sold GOOGL"
+- Create a sell rule for GOOGL with quantity_type "all"
+- Create a buy rule for AAPL with `buy_only_if_sold: ["GOOGL"]` and `use_proceeds_from_sale: true`
 
 ## EXAMPLES
 
@@ -172,6 +185,45 @@ You must output valid JSON matching this schema:
     "account_numbers": null,
     "must_hold_tickers": null
   }},
+  "cash_management": {{
+    "min_cash_percent": 0.02,
+    "min_cash_dollars": null,
+    "cash_equiv_sell_order": "largest_first"
+  }},
+  "sells_before_buys": true
+}}
+```
+
+### Example 4: "Sell all GOOGL for accounts that own it, buy AAPL with the proceeds for those accounts only"
+
+```json
+{{
+  "description": "Sell all GOOGL positions, reinvest proceeds into AAPL only for accounts that sold GOOGL",
+  "sell_rules": [
+    {{
+      "tickers": ["GOOGL"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null
+    }}
+  ],
+  "buy_rules": [
+    {{
+      "tickers": ["AAPL"],
+      "quantity_type": "dollars",
+      "quantity": null,
+      "allocation_method": "equal_weight",
+      "skip_if_allocation_above": null,
+      "buy_only_to_target": false,
+      "buy_only_if_sold": ["GOOGL"],
+      "use_proceeds_from_sale": true,
+      "cash_source": "available_cash",
+      "sell_cash_equiv_if_needed": false
+    }}
+  ],
+  "account_filter": null,
   "cash_management": {{
     "min_cash_percent": 0.02,
     "min_cash_dollars": null,

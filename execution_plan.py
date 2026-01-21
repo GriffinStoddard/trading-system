@@ -54,11 +54,15 @@ class BuyRule:
     quantity_type: QuantityType                   # How to interpret quantity
     quantity: Optional[float] = None              # Target amount per ticker
     allocation_method: AllocationMethod = AllocationMethod.EQUAL_WEIGHT
-    
+
     # Conditional logic
     skip_if_allocation_above: Optional[float] = None   # Skip if already own >= X%
     buy_only_to_target: bool = False                   # If true, only buy enough to reach target
-    
+
+    # Conditional execution - only buy for accounts that sold these tickers
+    buy_only_if_sold: Optional[list[str]] = None      # Only buy for accounts that sold these tickers
+    use_proceeds_from_sale: bool = False              # Use cash from the sell (not target allocation)
+
     # Cash sourcing
     cash_source: CashSource = CashSource.AVAILABLE_CASH
     sell_cash_equiv_if_needed: bool = False
@@ -125,6 +129,8 @@ class ExecutionPlan:
                     "allocation_method": r.allocation_method.value,
                     "skip_if_allocation_above": r.skip_if_allocation_above,
                     "buy_only_to_target": r.buy_only_to_target,
+                    "buy_only_if_sold": r.buy_only_if_sold,
+                    "use_proceeds_from_sale": r.use_proceeds_from_sale,
                     "cash_source": r.cash_source.value,
                     "sell_cash_equiv_if_needed": r.sell_cash_equiv_if_needed
                 }
@@ -167,6 +173,8 @@ class ExecutionPlan:
                 allocation_method=AllocationMethod(r.get("allocation_method", "equal_weight")),
                 skip_if_allocation_above=r.get("skip_if_allocation_above"),
                 buy_only_to_target=r.get("buy_only_to_target", False),
+                buy_only_if_sold=r.get("buy_only_if_sold"),
+                use_proceeds_from_sale=r.get("use_proceeds_from_sale", False),
                 cash_source=CashSource(r.get("cash_source", "available_cash")),
                 sell_cash_equiv_if_needed=r.get("sell_cash_equiv_if_needed", False)
             ))

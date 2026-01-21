@@ -29,7 +29,77 @@ from config import load_config, save_config, get_api_key
 
 
 # Version info
-VERSION = "2.0.0"
+VERSION = "2.1.0"
+
+
+def play_startup_sound():
+    """Play the startup sound in the background."""
+    try:
+        import subprocess
+        import threading
+
+        sound_path = get_base_path() / "design" / "trade_start_sound.mp3"
+        if sound_path.exists():
+            # Play sound in background (macOS)
+            def play():
+                try:
+                    subprocess.run(["afplay", str(sound_path)],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
+            thread = threading.Thread(target=play, daemon=True)
+            thread.start()
+    except Exception:
+        pass  # Silently fail if sound can't be played
+
+
+def display_startup_animation():
+    """Display a pixelized pac-man style startup animation with the company logo."""
+    import time
+
+    # Start playing sound
+    play_startup_sound()
+
+    # Company name with retro effect
+    company_name = """
+\033[94m   ███████╗████████╗ ██████╗ ██████╗ ██████╗  █████╗ ██████╗ ██████╗
+   ██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔══██╗
+   ███████╗   ██║   ██║   ██║██║  ██║██║  ██║███████║██████╔╝██║  ██║
+   ╚════██║   ██║   ██║   ██║██║  ██║██║  ██║██╔══██║██╔══██╗██║  ██║
+   ███████║   ██║   ╚██████╔╝██████╔╝██████╔╝██║  ██║██║  ██║██████╔╝
+   ╚══════╝   ╚═╝    ╚═════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
+
+         ███████╗██╗███╗   ██╗ █████╗ ███╗   ██╗ ██████╗██╗ █████╗ ██╗
+         ██╔════╝██║████╗  ██║██╔══██╗████╗  ██║██╔════╝██║██╔══██╗██║
+         █████╗  ██║██╔██╗ ██║███████║██╔██╗ ██║██║     ██║███████║██║
+         ██╔══╝  ██║██║╚██╗██║██╔══██║██║╚██╗██║██║     ██║██╔══██║██║
+         ██║     ██║██║ ╚████║██║  ██║██║ ╚████║╚██████╗██║██║  ██║███████╗
+         ╚═╝     ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝╚═╝  ╚═╝╚══════╝\033[0m
+"""
+
+    # Clear screen
+    print("\033[2J\033[H", end="")
+
+    time.sleep(0.3)
+
+    # Animate the company name appearing line by line
+    for line in company_name.split('\n'):
+        print(line)
+        time.sleep(0.05)
+
+    time.sleep(0.3)
+
+    # Loading bar animation
+    print("\n\033[94m   Loading Trading System", end="")
+    for _ in range(3):
+        for dot in [".", "..", "..."]:
+            print(f"\r\033[94m   Loading Trading System{dot}   \033[0m", end="", flush=True)
+            time.sleep(0.15)
+
+    print("\n")
+    time.sleep(0.2)
 
 
 def get_friendly_error_message(error: Exception) -> str:
@@ -286,17 +356,21 @@ def export_orders(
     buy_orders: list[Order],
     output_prefix: str = None
 ) -> tuple[str, str]:
-    """Export orders to CSV files."""
+    """Export orders to CSV files in a date-named subfolder."""
     base_path = get_base_path()
 
     date_str = datetime.now().strftime("%m-%d-%Y")
 
-    sell_filename = f"sell_order_{date_str}.csv"
-    buy_filename = f"buy_order_{date_str}.csv"
-    
-    sell_path = base_path / sell_filename
-    buy_path = base_path / buy_filename
-    
+    # Create subfolder with date name
+    output_folder = base_path / date_str
+    output_folder.mkdir(exist_ok=True)
+
+    sell_filename = "sell_order.csv"
+    buy_filename = "buy_order.csv"
+
+    sell_path = output_folder / sell_filename
+    buy_path = output_folder / buy_filename
+
     # Export sell orders
     if sell_orders:
         sell_data = [{
@@ -309,7 +383,7 @@ def export_orders(
         pd.DataFrame(sell_data).to_csv(sell_path, index=False)
     else:
         pd.DataFrame(columns=['Account Number', 'Security', 'Action', 'Share Quantity', 'Dollar Amount']).to_csv(sell_path, index=False)
-    
+
     # Export buy orders
     if buy_orders:
         buy_data = [{
@@ -322,8 +396,9 @@ def export_orders(
         pd.DataFrame(buy_data).to_csv(buy_path, index=False)
     else:
         pd.DataFrame(columns=['Account Number', 'Security', 'Action', 'Share Quantity', 'Dollar Amount']).to_csv(buy_path, index=False)
-    
-    return sell_filename, buy_filename
+
+    # Return paths relative to base (folder/filename)
+    return f"{date_str}/{sell_filename}", f"{date_str}/{buy_filename}"
 
 
 def run_trade_workflow(accounts: dict, stock_prices: dict[str, float], buy_list: list[str], config: dict):
@@ -531,7 +606,7 @@ def configure_api_key():
 
 def main():
     """Main program entry point - v2.0 Conversational Mode."""
-    display_header()
+    display_startup_animation()
 
     # Load configuration
     config = load_config()
@@ -556,8 +631,7 @@ def main():
         return
 
     try:
-        # Parse accounts
-        print(f"\nLoading data from: {excel_file}")
+        # Parse accounts silently
         parser = AccountParser(str(excel_path))
         accounts = parser.parse_accounts()
 
@@ -566,11 +640,8 @@ def main():
             input("\nPress Enter to exit...")
             return
 
-        print(f"Successfully loaded {len(accounts)} account(s)")
-
-        # Load prices
+        # Load prices silently
         stock_prices, buy_list = load_stock_prices(prices_file)
-        print(f"Loaded {len(stock_prices)} stock prices from {prices_file}")
 
     except Exception as e:
         print(f"\nError loading data: {get_friendly_error_message(e)}")
@@ -633,8 +704,9 @@ def main():
     # Set up export callback
     agent.export_orders_callback = export_orders
 
-    # Welcome message
-    print(agent.get_welcome_message())
+    # Brief greeting
+    print(agent.get_brief_greeting())
+    print("\n   Type 'help' for commands.\n")
 
     # Conversation loop
     while True:

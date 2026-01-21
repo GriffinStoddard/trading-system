@@ -78,6 +78,10 @@ class ConversationAgent:
         """Return the welcome message for starting the conversation."""
         return WELCOME_MESSAGE
 
+    def get_brief_greeting(self) -> str:
+        """Return a brief personalized greeting."""
+        return "\n\033[94m   Hello, Kevin. Let's trade.\033[0m"
+
     def chat(self, user_input: str) -> str:
         """
         Main entry point for processing user messages.
@@ -288,232 +292,30 @@ Answer the user's question based on this knowledge base and the current portfoli
         return "\n".join(lines)
 
     def _handle_trade_request(self, message: str) -> str:
-        """Handle a trade request - uses LLM to understand and clarify."""
+        """Handle a trade request - routes to LLM interpreter."""
         lower = message.lower()
 
         # Check for default mode request
         if 'default' in lower or ('use' in lower and 'standard' in lower):
             return self._execute_default_trade()
 
-        # Use LLM to understand and process the trade request
-        return self._process_trade_with_llm(message)
-
-    def _process_trade_with_llm(self, message: str) -> str:
-        """Process a trade request using LLM to understand and clarify."""
+        # Route all custom trade requests through the LLM interpreter
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=self.api_key)
-
-            # Build portfolio context
-            portfolio_context = self._build_portfolio_context()
-
-            system_prompt = f"""You are a trading assistant helping to process a trade request.
-
-## Current Portfolio
-{portfolio_context}
-
-## Buy List Available
-{', '.join(self.buy_list) if self.buy_list else 'No stocks in buy list'}
-
-## Your Task
-Analyze the user's trade request and extract the following information:
-1. Action: buy, sell, or both
-2. Target allocation (for buys): percentage of account value per stock
-3. Skip threshold: skip buying if already own above this percentage
-4. Sell cash equivalents: whether to liquidate cash equivalents ({', '.join(self.cash_equivalents)}) to fund buys
-5. Specific tickers to buy/sell (if mentioned)
-6. Dollar amounts or share counts (if mentioned)
-
-If any critical information is missing for a buy order (like target allocation), ask clarifying questions.
-If the request is clear enough, summarize what you understood.
-
-Respond in this JSON format:
-{{
-    "understood": {{
-        "action": "buy" or "sell" or "both",
-        "target_allocation": null or decimal (0.025 = 2.5%),
-        "skip_threshold": null or decimal,
-        "sell_cash_equiv": null or boolean,
-        "tickers": null or list of tickers,
-        "dollar_amount": null or number
-    }},
-    "is_complete": true or false,
-    "clarification_needed": "natural language questions to ask the user, or null if complete",
-    "summary": "brief summary of what will be done"
-}}"""
-
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=500,
-                system=system_prompt,
-                messages=[{"role": "user", "content": message}]
-            )
-
-            response_text = response.content[0].text.strip()
-
-            # Parse JSON response
-            if response_text.startswith("```"):
-                lines = response_text.split("\n")
-                response_text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-
-            result = json.loads(response_text)
-
-            if result.get("is_complete"):
-                # We have enough info, confirm the trade
-                info = result.get("understood", {})
-                info['original_request'] = message
-                return self._confirm_trade(info, message)
-            else:
-                # Need clarification
-                self.state.awaiting_clarification = True
-                self.state.pending_trade = result.get("understood", {})
-                self.state.pending_trade['original_request'] = message
-
-                clarification = result.get("clarification_needed", "Could you provide more details about your trade request?")
-                return f"I want to make sure I understand your request correctly.\n\n{clarification}\n\nOr say 'use defaults' to use the default settings (2.5% allocation, skip if >= 2% owned, sell cash equivalents if needed)."
-
-        except json.JSONDecodeError:
-            # LLM didn't return valid JSON, fall back to simpler approach
-            return self._process_trade_with_clarification_simple(message)
+            return self._process_trade_with_interpreter(message)
         except Exception as e:
             return f"I encountered an error processing your trade request: {e}\n\nPlease try rephrasing, or say 'use default' to use the default specification."
 
-    def _process_trade_with_clarification_simple(self, message: str) -> str:
-        """Simpler trade processing fallback."""
-        info = self._extract_trade_info(message)
+    def _process_trade_with_interpreter(self, message: str) -> str:
+        """Process a trade request using the full LLM interpreter."""
+        from llm_interpreter import LLMInterpreter
 
-        # If we have enough info, confirm
-        if self._has_complete_info(info):
-            return self._confirm_trade(info, message)
-
-        # Ask clarifying questions
-        self.state.awaiting_clarification = True
-        self.state.pending_trade = info
-        self.state.pending_trade['original_request'] = message
-
-        questions = []
-        if not info.get('target_allocation') and not info.get('dollar_amount'):
-            questions.append("- What target allocation per stock? (e.g., 2.5% of account value)")
-        if info.get('skip_threshold') is None:
-            questions.append("- Should I skip stocks you already own above a certain threshold? (e.g., skip if >= 2%)")
-        if info.get('sell_cash_equiv') is None:
-            questions.append("- Should I sell cash equivalents if needed to fund buys?")
-
-        return f"""I can help with that trade. A few questions:
-
-{chr(10).join(questions)}
-
-Or say 'use defaults' for standard settings."""
-
-    def _extract_trade_info(self, message: str) -> dict:
-        """Extract trade information from a natural language message."""
-        lower = message.lower()
-        info = {}
-
-        # Determine action
-        if 'sell' in lower and 'buy' not in lower:
-            info['action'] = 'sell'
-        elif 'buy' in lower:
-            info['action'] = 'buy'
-        else:
-            info['action'] = 'buy'  # Default to buy for the buy list
-
-        # Look for percentages
-        import re
-        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', message)
-        if pct_match:
-            pct = float(pct_match.group(1)) / 100
-            if 'target' in lower or 'allocation' in lower or 'each' in lower:
-                info['target_allocation'] = pct
-            elif 'skip' in lower or 'already' in lower or 'own' in lower:
-                info['skip_threshold'] = pct
-
-        # Look for dollar amounts
-        dollar_match = re.search(r'\$\s*([\d,]+(?:\.\d+)?)', message)
-        if dollar_match:
-            info['dollar_amount'] = float(dollar_match.group(1).replace(',', ''))
-
-        # Check for cash equivalent selling
-        if 'sell cash' in lower or 'cash equivalent' in lower or 'liquidate' in lower:
-            info['sell_cash_equiv'] = True
-
-        # Check for explicit skip mentions
-        if 'skip' in lower:
-            info['skip_threshold'] = info.get('skip_threshold', 0.02)  # Default to 2%
-
-        return info
-
-    def _has_complete_info(self, info: dict) -> bool:
-        """Check if we have enough information to generate orders."""
-        if info.get('action') == 'buy':
-            # Need at least a target allocation or dollar amount
-            return bool(info.get('target_allocation') or info.get('dollar_amount'))
-        elif info.get('action') == 'sell':
-            # Need tickers or an amount
-            return bool(info.get('tickers') or info.get('dollar_amount'))
-        return False
-
-    def _handle_clarification_response(self, message: str) -> str:
-        """Handle user's response to clarification questions."""
-        lower = message.lower()
-
-        # Check if we're waiting for an API key
-        if self.state.pending_trade and self.state.pending_trade.get('action') == 'set_api_key':
-            return self._save_api_key(message.strip())
-
-        # Check for "use defaults"
-        if 'default' in lower:
-            self.state.awaiting_clarification = False
-            self.state.pending_trade = None
-            return self._execute_default_trade()
-
-        # Parse the response and update pending trade
-        info = self.state.pending_trade or {}
-
-        # Try to extract target allocation
-        import re
-        pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', message)
-        if pct_match:
-            pct = float(pct_match.group(1)) / 100
-            if 'skip' in lower or 'already' in lower or 'own' in lower:
-                info['skip_threshold'] = pct
-            else:
-                info['target_allocation'] = pct
-
-        # Check for yes/no on cash equivalents
-        if 'yes' in lower and ('cash' in lower or 'sell' in lower or len(lower) < 10):
-            info['sell_cash_equiv'] = True
-        elif 'no' in lower:
-            if 'skip' not in lower:  # "no" to cash equiv selling
-                info['sell_cash_equiv'] = False
-
-        self.state.pending_trade = info
-
-        # Check if we now have complete info
-        if self._has_complete_info(info):
-            self.state.awaiting_clarification = False
-            return self._confirm_trade(info, info.get('original_request', ''))
-
-        # Ask remaining questions
-        remaining_questions = []
-        if not info.get('target_allocation') and not info.get('dollar_amount'):
-            remaining_questions.append("What target allocation per stock? (e.g., 2.5%)")
-        if info.get('skip_threshold') is None and 'skip' not in lower:
-            remaining_questions.append("Should I skip stocks you already own above a certain threshold?")
-        if info.get('sell_cash_equiv') is None:
-            remaining_questions.append("Should I sell cash equivalents if needed?")
-
-        if remaining_questions:
-            return f"Got it. A few more questions:\n\n" + "\n".join(f"- {q}" for q in remaining_questions)
-
-        # We have enough, proceed
-        self.state.awaiting_clarification = False
-        return self._confirm_trade(info, info.get('original_request', ''))
-
-    def _confirm_trade(self, info: dict, original_request: str) -> str:
-        """Show confirmation of what will be done and ask for approval."""
-        # Build execution plan
-        plan = self._build_plan_from_info(info)
+        interpreter = LLMInterpreter(self.api_key)
+        plan = interpreter.interpret(
+            message,
+            self.accounts,
+            self.buy_list,
+            self.stock_prices
+        )
 
         # Execute plan to get orders
         generator = OrderGenerator(self.accounts, self.stock_prices)
@@ -536,39 +338,28 @@ Or say 'use defaults' for standard settings."""
 
 Would you like me to generate these orders? (yes/no)"""
 
-    def _build_plan_from_info(self, info: dict) -> ExecutionPlan:
-        """Build an ExecutionPlan from extracted info."""
-        target_alloc = info.get('target_allocation', 0.025)
-        skip_threshold = info.get('skip_threshold', 0.02)
-        sell_ce = info.get('sell_cash_equiv', True)
-        cash_floor = self.config.get('default_cash_floor_percent', 0.02)
+    def _handle_clarification_response(self, message: str) -> str:
+        """Handle user's response to clarification questions."""
+        lower = message.lower()
 
-        description = f"Buy to {target_alloc*100:.1f}% target allocation per stock."
-        if skip_threshold:
-            description += f" Skip if >= {skip_threshold*100:.1f}% owned."
-        if sell_ce:
-            description += " Sell cash equivalents if needed."
-        description += f" Maintain {cash_floor*100:.0f}% cash floor."
+        # Check if we're waiting for an API key
+        if self.state.pending_trade and self.state.pending_trade.get('action') == 'set_api_key':
+            return self._save_api_key(message.strip())
 
-        return ExecutionPlan(
-            description=description,
-            buy_rules=[
-                BuyRule(
-                    tickers=self.buy_list,
-                    quantity_type=QuantityType.PERCENT_OF_ACCOUNT,
-                    quantity=target_alloc,
-                    allocation_method=AllocationMethod.EQUAL_WEIGHT,
-                    skip_if_allocation_above=skip_threshold,
-                    buy_only_to_target=True,
-                    cash_source=CashSource.CASH_EQUIVALENTS if sell_ce else CashSource.AVAILABLE_CASH,
-                    sell_cash_equiv_if_needed=sell_ce
-                )
-            ],
-            cash_management=CashManagement(
-                min_cash_percent=cash_floor,
-                cash_equiv_sell_order="largest_first"
-            )
-        )
+        # Check for "use defaults"
+        if 'default' in lower:
+            self.state.awaiting_clarification = False
+            self.state.pending_trade = None
+            return self._execute_default_trade()
+
+        # For any other clarification, treat it as a new trade request
+        self.state.awaiting_clarification = False
+        original = self.state.pending_trade.get('original_request', '') if self.state.pending_trade else ''
+        self.state.pending_trade = None
+
+        # Combine original request with clarification for context
+        combined_request = f"{original} {message}".strip() if original else message
+        return self._handle_trade_request(combined_request)
 
     def _handle_confirmation(self, message: str) -> str:
         """Handle yes/no confirmation response."""
@@ -608,23 +399,28 @@ Would you like me to generate these orders? (yes/no)"""
                 plan.description, sell_file, buy_file
             )
 
-            # Save report to file
+            # Save report to the same folder as the order files
             from pathlib import Path
-            from datetime import datetime
-            date_str = datetime.now().strftime("%m-%d-%Y")
-            report_file = f"trade_report_{date_str}.txt"
-            report_path = Path.cwd() / report_file
+            # Extract the folder from sell_file path (e.g., "01-20-2026/sell_order.csv" -> "01-20-2026")
+            date_folder = sell_file.split('/')[0] if '/' in sell_file else ""
+            report_filename = "trade_report.txt"
+
+            if date_folder:
+                report_path = Path.cwd() / date_folder / report_filename
+                report_file = f"{date_folder}/{report_filename}"
+            else:
+                report_path = Path.cwd() / report_filename
+                report_file = report_filename
+
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write(report)
 
             result = f"""Orders generated successfully!
 
-Files created:
-- {sell_file} ({len(sell_orders)} sell orders)
-- {buy_file} ({len(buy_orders)} buy orders)
-- {report_file} (summary report)
-
-{report}
+Files created in '{date_folder}/' folder:
+- sell_order.csv ({len(sell_orders)} sell orders)
+- buy_order.csv ({len(buy_orders)} buy orders)
+- trade_report.txt (summary report)
 
 What else can I help you with?"""
         else:
