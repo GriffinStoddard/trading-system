@@ -78,23 +78,42 @@ class AccountParser:
         from config import get_cash_equivalents
         self.cash_equivalents = set(get_cash_equivalents())
     
+    # Column name variations we accept
+    ACCOUNT_COL_NAMES = ['Account Number', 'LPL Account Number', 'Account', 'Account No', 'Account #', 'Acct Number']
+
+    def _find_account_column(self, df) -> Optional[str]:
+        """Find the account number column in the dataframe."""
+        for col_name in self.ACCOUNT_COL_NAMES:
+            if col_name in df.columns:
+                return col_name
+        return None
+
     def parse_accounts(self, sheet_name=0) -> dict[str, Account]:
         """Parse the Excel file and create Account objects.
 
         Args:
             sheet_name: Sheet to read. Defaults to 0 (first sheet).
                         Can also pass a string name if needed.
-        """
-        df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
 
-        # Check for account number column (supports multiple naming conventions)
-        account_col = None
-        for col_name in ['Account Number', 'LPL Account Number', 'Account', 'Account No', 'Account #', 'Acct Number']:
-            if col_name in df.columns:
-                account_col = col_name
-                break
+        Automatically detects if headers are on row 1 or row 2 (common when
+        users put a title or other data in the first cell).
+        """
+        # Try reading with headers on row 0 (default)
+        df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
+        account_col = self._find_account_column(df)
+
+        # If not found, try headers on row 1 (row 2 in Excel terms)
         if account_col is None:
-            raise ValueError("Could not find Account Number column. Expected one of: 'Account Number', 'LPL Account Number', 'Account', 'Account No', 'Account #', 'Acct Number'")
+            df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name, header=1)
+            account_col = self._find_account_column(df)
+
+        # If still not found, try row 2 (row 3 in Excel terms)
+        if account_col is None:
+            df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name, header=2)
+            account_col = self._find_account_column(df)
+
+        if account_col is None:
+            raise ValueError(f"Could not find Account Number column. Expected one of: {', '.join(self.ACCOUNT_COL_NAMES)}")
 
         # Check for client/account name column (supports multiple naming conventions)
         name_col = None
