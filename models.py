@@ -86,23 +86,32 @@ class AccountParser:
                         Can also pass a string name if needed.
         """
         df = pd.read_excel(self.excel_file_path, sheet_name=sheet_name)
-        
+
+        # Check for account number column (supports multiple naming conventions)
+        account_col = None
+        for col_name in ['Account Number', 'LPL Account Number', 'Account', 'Account No', 'Account #', 'Acct Number']:
+            if col_name in df.columns:
+                account_col = col_name
+                break
+        if account_col is None:
+            raise ValueError("Could not find Account Number column. Expected one of: 'Account Number', 'LPL Account Number', 'Account', 'Account No', 'Account #', 'Acct Number'")
+
         # Check for client/account name column (supports multiple naming conventions)
         name_col = None
-        for col_name in ['Account Name', 'Client Name', 'Client name', 'account name']:
+        for col_name in ['Account Name', 'Client Name', 'Client name', 'account name', 'Name']:
             if col_name in df.columns:
                 name_col = col_name
                 break
         has_client_name = name_col is not None
-        
-        account_numbers = df['Account Number'].unique()
-        
+
+        account_numbers = df[account_col].unique()
+
         for account_num in account_numbers:
             if pd.isna(account_num):
                 continue
-            
+
             account_num_str = str(account_num)
-            account_data = df[df['Account Number'] == account_num]
+            account_data = df[df[account_col] == account_num]
             
             # Get client name from first row of account data
             client_name = ""
