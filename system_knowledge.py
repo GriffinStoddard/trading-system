@@ -162,7 +162,7 @@ Just tell me what you'd like to do in plain English!
 
 WELCOME_MESSAGE = """
 ================================================================================
-   TRADING SYSTEM v2.1.0 - Conversational Mode
+   TRADING SYSTEM v2.2.0 - Conversational Mode
 ================================================================================
 
 Hello! I'm your trading assistant. I can help you:

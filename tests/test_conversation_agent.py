@@ -52,7 +52,7 @@ class TestSystemKnowledge:
     def test_welcome_message_exists(self):
         """Verify welcome message is not empty."""
         assert len(WELCOME_MESSAGE) > 50
-        assert "2.1.0" in WELCOME_MESSAGE
+        assert "2.2.0" in WELCOME_MESSAGE
 
     def test_system_knowledge_contains_key_concepts(self):
         """Verify system knowledge covers key concepts."""
@@ -110,7 +110,7 @@ class TestConversationAgentSetup:
     def test_get_welcome_message(self, agent):
         """Test welcome message is returned."""
         welcome = agent.get_welcome_message()
-        assert "2.1.0" in welcome
+        assert "2.2.0" in welcome
         assert "Conversational" in welcome
 
 
