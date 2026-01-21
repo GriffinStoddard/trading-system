@@ -2,6 +2,9 @@
 orders_*.csv
 *_REPORT.txt
 
+# Config with API keys - use config.example.json as template
+config.json
+
 # Python
 __pycache__/
 *.py[cod]
