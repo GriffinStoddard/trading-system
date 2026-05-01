@@ -179,6 +179,16 @@ class OrderGenerator:
                 - analysis.cash_used_for_buys
             )
 
+            # Check if final cash is below the floor
+            min_cash_required = analysis.total_value * plan.cash_management.min_cash_percent
+            if plan.cash_management.min_cash_dollars:
+                min_cash_required = max(min_cash_required, plan.cash_management.min_cash_dollars)
+            if analysis.cash_after < min_cash_required:
+                analysis.warnings.append(
+                    f"Below {plan.cash_management.min_cash_percent*100:.0f}% cash floor "
+                    f"(${analysis.cash_after:,.2f} < ${min_cash_required:,.2f})"
+                )
+
             self.analyses.append(analysis)
 
         return all_sell_orders, all_buy_orders
@@ -187,9 +197,9 @@ class OrderGenerator:
         """Check if account passes the filter criteria."""
         if filter_obj is None:
             return True
-        
+
         total_value = account.get_total_value()
-        
+
         if filter_obj.min_value and total_value < filter_obj.min_value:
             return False
         if filter_obj.max_value and total_value > filter_obj.max_value:
@@ -201,7 +211,20 @@ class OrderGenerator:
             required = {t.upper() for t in filter_obj.must_hold_tickers}
             if not required.intersection(held):
                 return False
-        
+        if filter_obj.client_name_contains:
+            # Check if client name contains any of the specified strings (case-insensitive)
+            client_name_lower = (account.client_name or "").lower()
+            matches = any(name.lower() in client_name_lower for name in filter_obj.client_name_contains)
+            if not matches:
+                return False
+
+        if filter_obj.exclude_client_names:
+            # Exclude if client name contains any of the specified strings (case-insensitive)
+            client_name_lower = (account.client_name or "").lower()
+            for name in filter_obj.exclude_client_names:
+                if name.lower() in client_name_lower:
+                    return False
+
         return True
     
     def _process_sell_rule(
@@ -218,6 +241,10 @@ class OrderGenerator:
         orders = []
         cash_generated = 0.0
         tickers_sold: dict[str, float] = {}
+
+        # Check if rule has its own account filter
+        if rule.account_filter and not self._passes_filter(account, rule.account_filter):
+            return orders, cash_generated, tickers_sold
 
         for ticker in rule.tickers:
             ticker = ticker.upper()
@@ -483,35 +510,52 @@ class OrderGenerator:
         
         # Calculate total cash needed
         total_cash_needed = sum(need[2] for need in buy_needs)
-        
+
         # Determine usable cash (respecting minimum)
         usable_cash = max(0, available_cash - min_cash_required)
-        
+
+        # Track already-sold CE shares for iterative selling
+        already_sold_ce: dict[str, int] = {}
+
         # If we need more cash and rule allows selling cash equivalents
         cash_shortfall = total_cash_needed - usable_cash
-        
+
         if cash_shortfall > 0 and rule.sell_cash_equiv_if_needed:
             # Sell cash equivalents to cover shortfall
             ce_orders, cash_raised = self._sell_cash_equivalents_for_cash(
-                account, 
+                account,
                 cash_shortfall,
                 cash_mgmt.cash_equiv_sell_order,
-                analysis
+                analysis,
+                already_sold_ce
             )
             ce_sell_orders.extend(ce_orders)
             usable_cash += cash_raised
-        
+
         # Now create buy orders with available cash
         remaining_cash = usable_cash
-        
+
         for ticker, shares, cost, curr_shares, curr_value, curr_alloc, target_alloc in buy_needs:
             price = self.stock_prices[ticker]
-            
-            # Adjust if we don't have enough cash
+
+            # If we don't have enough cash for the full buy, try to sell more CEs
+            if cost > remaining_cash and rule.sell_cash_equiv_if_needed:
+                additional_needed = cost - remaining_cash
+                more_orders, more_cash = self._sell_cash_equivalents_for_cash(
+                    account,
+                    additional_needed,
+                    cash_mgmt.cash_equiv_sell_order,
+                    analysis,
+                    already_sold_ce
+                )
+                ce_sell_orders.extend(more_orders)
+                remaining_cash += more_cash
+
+            # Recalculate shares if we still don't have enough
             if cost > remaining_cash:
                 shares = math.floor(remaining_cash / price)
                 cost = shares * price
-            
+
             if shares <= 0:
                 analysis.ticker_analysis.append(TickerAnalysis(
                     ticker=ticker,
@@ -527,10 +571,57 @@ class OrderGenerator:
                 ))
                 analysis.warnings.append(f"Insufficient cash to buy {ticker}")
                 continue
-            
+
+            # Check minimum buy allocation threshold
+            if rule.min_buy_allocation and total_value > 0:
+                buy_allocation = cost / total_value
+                if buy_allocation < rule.min_buy_allocation:
+                    analysis.ticker_analysis.append(TickerAnalysis(
+                        ticker=ticker,
+                        current_shares=curr_shares,
+                        current_value=curr_value,
+                        current_allocation=curr_alloc,
+                        target_allocation=target_alloc,
+                        action="SKIP",
+                        shares_to_trade=0,
+                        estimated_value=0,
+                        new_allocation=curr_alloc,
+                        reason=f"Buy < {rule.min_buy_allocation*100:.1f}% minimum"
+                    ))
+                    continue
+
+            # Check cash floor enforcement (unless using proceeds only)
+            if not use_proceeds_only and min_cash_required > 0:
+                projected_remaining = remaining_cash - cost
+                # remaining_cash is already = available_cash - min_cash_required - previous_buys
+                # so projected_remaining < 0 means we'd go below floor
+                if projected_remaining < 0:
+                    # Reduce shares to respect floor
+                    max_spendable = remaining_cash
+                    if max_spendable <= 0:
+                        shares = 0
+                    else:
+                        shares = math.floor(max_spendable / price)
+                        cost = shares * price
+
+                    if shares <= 0:
+                        analysis.ticker_analysis.append(TickerAnalysis(
+                            ticker=ticker,
+                            current_shares=curr_shares,
+                            current_value=curr_value,
+                            current_allocation=curr_alloc,
+                            target_allocation=target_alloc,
+                            action="SKIP",
+                            shares_to_trade=0,
+                            estimated_value=0,
+                            new_allocation=curr_alloc,
+                            reason="Would violate cash floor"
+                        ))
+                        continue
+
             new_value = curr_value + cost
             new_alloc = new_value / total_value
-            
+
             order = Order(
                 account_num=account.account_num,
                 client_name=account.client_name,
@@ -543,7 +634,7 @@ class OrderGenerator:
             buy_orders.append(order)
             total_cash_used += cost
             remaining_cash -= cost
-            
+
             analysis.ticker_analysis.append(TickerAnalysis(
                 ticker=ticker,
                 current_shares=curr_shares,
@@ -564,46 +655,61 @@ class OrderGenerator:
         account: Account,
         amount_needed: float,
         sell_order: str,
-        analysis: AccountTradeAnalysis
+        analysis: AccountTradeAnalysis,
+        already_sold: dict[str, int] = None
     ) -> tuple[list[Order], float]:
-        """Sell cash equivalents to raise needed cash."""
+        """Sell cash equivalents to raise needed cash.
+
+        Args:
+            already_sold: Dict of {ticker: shares_already_sold} to track iterative selling
+        """
         orders = []
         cash_raised = 0.0
-        
+        if already_sold is None:
+            already_sold = {}
+
         # Sort cash equivalents
         cash_equivs = list(account.cash_equivalents)
         if sell_order == "largest_first":
             cash_equivs.sort(key=lambda x: x.market_value or 0, reverse=True)
         else:
             cash_equivs.sort(key=lambda x: x.market_value or 0)
-        
+
         remaining_needed = amount_needed
-        
+
         for ce in cash_equivs:
             if remaining_needed <= 0:
                 break
-            
+
             if not ce.market_value or ce.market_value <= 0:
                 continue
-            
+
             price = ce.price or self.stock_prices.get(ce.symbol, 0)
             if price <= 0:
                 continue
-            
+
+            # Calculate available shares (accounting for already sold)
+            prev_sold = already_sold.get(ce.symbol, 0)
+            available_shares = int(ce.shares) - prev_sold
+            if available_shares <= 0:
+                continue
+
+            available_value = available_shares * price
+
             # Calculate shares to sell
-            if ce.market_value <= remaining_needed:
-                # Sell entire position
-                shares_to_sell = int(ce.shares)
+            if available_value <= remaining_needed:
+                # Sell entire remaining position
+                shares_to_sell = available_shares
             else:
                 # Sell just enough
                 shares_to_sell = math.ceil(remaining_needed / price)
-                shares_to_sell = min(shares_to_sell, int(ce.shares))
-            
+                shares_to_sell = min(shares_to_sell, available_shares)
+
             if shares_to_sell <= 0:
                 continue
-            
+
             value = shares_to_sell * price
-            
+
             order = Order(
                 account_num=account.account_num,
                 client_name=account.client_name,
@@ -616,12 +722,15 @@ class OrderGenerator:
             orders.append(order)
             cash_raised += value
             remaining_needed -= value
-            
+
+            # Track what we've sold
+            already_sold[ce.symbol] = prev_sold + shares_to_sell
+
             # Add to analysis
             curr_alloc = (ce.market_value or 0) / account.get_total_value()
-            remaining_value = (ce.shares - shares_to_sell) * price
+            remaining_value = (int(ce.shares) - already_sold[ce.symbol]) * price
             new_alloc = remaining_value / account.get_total_value()
-            
+
             analysis.ticker_analysis.append(TickerAnalysis(
                 ticker=ce.symbol,
                 current_shares=ce.shares,
@@ -634,7 +743,7 @@ class OrderGenerator:
                 new_allocation=new_alloc,
                 reason="Selling cash equivalent to fund purchases"
             ))
-        
+
         return orders, cash_raised
     
     def get_analyses(self) -> list[AccountTradeAnalysis]:

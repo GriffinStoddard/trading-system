@@ -35,7 +35,8 @@ You must output valid JSON matching this schema:
       "quantity": null or number,
       "priority": "largest_first",
       "min_shares_remaining": null or integer,
-      "max_percent_of_position": null or decimal
+      "max_percent_of_position": null or decimal,
+      "account_filter": null or {{ per-rule filter, same structure as plan-level account_filter }}
     }}
   ],
   "buy_rules": [
@@ -49,14 +50,17 @@ You must output valid JSON matching this schema:
       "buy_only_if_sold": null or ["TICKER1"],
       "use_proceeds_from_sale": true|false,
       "cash_source": "available_cash|cash_equivalents",
-      "sell_cash_equiv_if_needed": true|false
+      "sell_cash_equiv_if_needed": true|false,
+      "min_buy_allocation": null or decimal
     }}
   ],
   "account_filter": null or {{
     "min_value": null or number,
     "max_value": null or number,
     "account_numbers": null or ["acc1", "acc2"],
-    "must_hold_tickers": null or ["TICK1"]
+    "must_hold_tickers": null or ["TICK1"],
+    "client_name_contains": null or ["name1", "name2"],
+    "exclude_client_names": null or ["name1", "name2"]
   }},
   "cash_management": {{
     "min_cash_percent": decimal (default 0.02 for 2%),
@@ -95,6 +99,37 @@ When the user wants to sell a stock and then buy another stock ONLY for accounts
 Example: "Sell GOOGL, then buy AAPL with the proceeds for accounts that sold GOOGL"
 - Create a sell rule for GOOGL with quantity_type "all"
 - Create a buy rule for AAPL with `buy_only_if_sold: ["GOOGL"]` and `use_proceeds_from_sale: true`
+
+## PER-RULE ACCOUNT FILTERS
+
+Each sell_rule can have its own `account_filter` that applies only to that specific rule. This allows different rules to target different subsets of accounts.
+
+Use cases:
+- Sell ticker X from ALL accounts, but sell ticker Y only from specific accounts
+- Filter by client name using `client_name_contains` (case-insensitive partial match)
+
+Example: "Sell all AAPL in all accounts. For accounts with 'Smith' in the name, also sell GOOGL"
+- First sell rule: tickers ["AAPL"], no account_filter (applies to all)
+- Second sell rule: tickers ["GOOGL"], account_filter with client_name_contains ["Smith"]
+
+## CLIENT NAME FILTERING
+
+Use `client_name_contains` in account_filter to filter accounts by client/account name:
+- It's an array of strings - account matches if name contains ANY of the strings
+- Matching is case-insensitive
+- Useful when user says "for accounts named X" or "for client Y"
+
+Use `exclude_client_names` to EXCLUDE accounts by client name:
+- It's an array of strings - account is EXCLUDED if name contains ANY of the strings
+- Matching is case-insensitive
+- Useful when user says "except for client X" or "not for accounts named Y"
+
+## MINIMUM BUY SIZE
+
+Use `min_buy_allocation` in buy_rules to skip small buys:
+- Decimal value (0.01 = 1% of account)
+- If the calculated buy amount is less than this percentage of the account, the buy is skipped
+- Useful when user says "skip buys under X% of account value"
 
 ## EXAMPLES
 
@@ -221,6 +256,109 @@ Example: "Sell GOOGL, then buy AAPL with the proceeds for accounts that sold GOO
       "use_proceeds_from_sale": true,
       "cash_source": "available_cash",
       "sell_cash_equiv_if_needed": false
+    }}
+  ],
+  "account_filter": null,
+  "cash_management": {{
+    "min_cash_percent": 0.02,
+    "min_cash_dollars": null,
+    "cash_equiv_sell_order": "largest_first"
+  }},
+  "sells_before_buys": true
+}}
+```
+
+### Example 5: "In all accounts sell DHR, PEP, AAPL. For accounts named 'Smith', also sell VSMIX. For accounts named 'Johnson', also sell MTCIX and PRBLX"
+
+This example shows MULTIPLE sell rules with different account filters - a global rule plus account-specific rules.
+
+```json
+{{
+  "description": "Sell DHR, PEP, AAPL from all accounts. Additionally sell VSMIX from Smith accounts and MTCIX, PRBLX from Johnson accounts",
+  "sell_rules": [
+    {{
+      "tickers": ["DHR", "PEP", "AAPL"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null,
+      "account_filter": null
+    }},
+    {{
+      "tickers": ["VSMIX"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null,
+      "account_filter": {{
+        "client_name_contains": ["Smith"]
+      }}
+    }},
+    {{
+      "tickers": ["MTCIX", "PRBLX"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null,
+      "account_filter": {{
+        "client_name_contains": ["Johnson"]
+      }}
+    }}
+  ],
+  "buy_rules": [],
+  "account_filter": null,
+  "cash_management": {{
+    "min_cash_percent": 0.02,
+    "min_cash_dollars": null,
+    "cash_equiv_sell_order": "largest_first"
+  }},
+  "sells_before_buys": true
+}}
+```
+
+### Example 6: "Sell PRWCX and B from all accounts, except don't sell PRWCX for Virginia Killeen. Buy from buy list to 2.5% targets, skip buys under 1%"
+
+This example shows using `exclude_client_names` to exclude a specific client from a sell rule, and `min_buy_allocation` to skip small buys.
+
+```json
+{{
+  "description": "Sell PRWCX (except Virginia Killeen) and B from all accounts, buy to 2.5% targets, skip buys under 1%",
+  "sell_rules": [
+    {{
+      "tickers": ["PRWCX"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null,
+      "account_filter": {{
+        "exclude_client_names": ["Killeen"]
+      }}
+    }},
+    {{
+      "tickers": ["B"],
+      "quantity_type": "all",
+      "quantity": null,
+      "priority": "largest_first",
+      "min_shares_remaining": null,
+      "max_percent_of_position": null,
+      "account_filter": null
+    }}
+  ],
+  "buy_rules": [
+    {{
+      "tickers": ["CRDO", "GOOG", "NVDA"],
+      "quantity_type": "percent_of_account",
+      "quantity": 0.025,
+      "allocation_method": "equal_weight",
+      "skip_if_allocation_above": null,
+      "buy_only_to_target": true,
+      "cash_source": "cash_equivalents",
+      "sell_cash_equiv_if_needed": true,
+      "min_buy_allocation": 0.01
     }}
   ],
   "account_filter": null,

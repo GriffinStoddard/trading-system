@@ -41,10 +41,13 @@ class SellRule:
     quantity_type: QuantityType                   # How to interpret quantity
     quantity: Optional[float] = None              # The amount (interpretation depends on type)
     priority: str = "largest_first"               # Which positions to sell first
-    
+
     # Constraints
     min_shares_remaining: Optional[int] = None    # Don't reduce below this
     max_percent_of_position: Optional[float] = None  # Don't sell more than X% of any position
+
+    # Per-rule account filter (overrides plan-level filter for this rule)
+    account_filter: Optional["AccountFilter"] = None
 
 
 @dataclass
@@ -67,14 +70,19 @@ class BuyRule:
     cash_source: CashSource = CashSource.AVAILABLE_CASH
     sell_cash_equiv_if_needed: bool = False
 
+    # Minimum buy size
+    min_buy_allocation: Optional[float] = None    # Skip if buy < X% of account (e.g., 0.01 = 1%)
 
-@dataclass 
+
+@dataclass
 class AccountFilter:
     """Filter to determine which accounts to process."""
     min_value: Optional[float] = None             # Skip accounts below this value
     max_value: Optional[float] = None             # Skip accounts above this value
     account_numbers: Optional[list[str]] = None   # Only process these accounts
     must_hold_tickers: Optional[list[str]] = None # Only process if holds these
+    client_name_contains: Optional[list[str]] = None  # Only process if client name contains any of these strings
+    exclude_client_names: Optional[list[str]] = None  # Exclude if client name contains any of these strings
 
 
 @dataclass
@@ -106,6 +114,17 @@ class ExecutionPlan:
     # Execution order
     sells_before_buys: bool = True                # Execute sells first to free up cash
     
+    def _serialize_account_filter(self, af: AccountFilter) -> dict:
+        """Serialize an AccountFilter to dict."""
+        return {
+            "min_value": af.min_value,
+            "max_value": af.max_value,
+            "account_numbers": af.account_numbers,
+            "must_hold_tickers": af.must_hold_tickers,
+            "client_name_contains": af.client_name_contains,
+            "exclude_client_names": af.exclude_client_names
+        }
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -117,7 +136,8 @@ class ExecutionPlan:
                     "quantity": r.quantity,
                     "priority": r.priority,
                     "min_shares_remaining": r.min_shares_remaining,
-                    "max_percent_of_position": r.max_percent_of_position
+                    "max_percent_of_position": r.max_percent_of_position,
+                    "account_filter": self._serialize_account_filter(r.account_filter) if r.account_filter else None
                 }
                 for r in self.sell_rules
             ],
@@ -132,16 +152,12 @@ class ExecutionPlan:
                     "buy_only_if_sold": r.buy_only_if_sold,
                     "use_proceeds_from_sale": r.use_proceeds_from_sale,
                     "cash_source": r.cash_source.value,
-                    "sell_cash_equiv_if_needed": r.sell_cash_equiv_if_needed
+                    "sell_cash_equiv_if_needed": r.sell_cash_equiv_if_needed,
+                    "min_buy_allocation": r.min_buy_allocation
                 }
                 for r in self.buy_rules
             ],
-            "account_filter": {
-                "min_value": self.account_filter.min_value,
-                "max_value": self.account_filter.max_value,
-                "account_numbers": self.account_filter.account_numbers,
-                "must_hold_tickers": self.account_filter.must_hold_tickers
-            } if self.account_filter else None,
+            "account_filter": self._serialize_account_filter(self.account_filter) if self.account_filter else None,
             "cash_management": {
                 "min_cash_percent": self.cash_management.min_cash_percent,
                 "min_cash_dollars": self.cash_management.min_cash_dollars,
@@ -151,17 +167,33 @@ class ExecutionPlan:
         }
     
     @classmethod
+    def _parse_account_filter(cls, af_data: dict) -> AccountFilter:
+        """Parse an AccountFilter from dict."""
+        return AccountFilter(
+            min_value=af_data.get("min_value"),
+            max_value=af_data.get("max_value"),
+            account_numbers=af_data.get("account_numbers"),
+            must_hold_tickers=af_data.get("must_hold_tickers"),
+            client_name_contains=af_data.get("client_name_contains"),
+            exclude_client_names=af_data.get("exclude_client_names")
+        )
+
+    @classmethod
     def from_dict(cls, data: dict) -> "ExecutionPlan":
         """Create ExecutionPlan from dictionary (e.g., from LLM JSON output)."""
         sell_rules = []
         for r in data.get("sell_rules", []):
+            rule_account_filter = None
+            if r.get("account_filter"):
+                rule_account_filter = cls._parse_account_filter(r["account_filter"])
             sell_rules.append(SellRule(
                 tickers=r["tickers"],
                 quantity_type=QuantityType(r["quantity_type"]),
                 quantity=r.get("quantity"),
                 priority=r.get("priority", "largest_first"),
                 min_shares_remaining=r.get("min_shares_remaining"),
-                max_percent_of_position=r.get("max_percent_of_position")
+                max_percent_of_position=r.get("max_percent_of_position"),
+                account_filter=rule_account_filter
             ))
         
         buy_rules = []
@@ -176,18 +208,13 @@ class ExecutionPlan:
                 buy_only_if_sold=r.get("buy_only_if_sold"),
                 use_proceeds_from_sale=r.get("use_proceeds_from_sale", False),
                 cash_source=CashSource(r.get("cash_source", "available_cash")),
-                sell_cash_equiv_if_needed=r.get("sell_cash_equiv_if_needed", False)
+                sell_cash_equiv_if_needed=r.get("sell_cash_equiv_if_needed", False),
+                min_buy_allocation=r.get("min_buy_allocation")
             ))
         
         account_filter = None
         if data.get("account_filter"):
-            af = data["account_filter"]
-            account_filter = AccountFilter(
-                min_value=af.get("min_value"),
-                max_value=af.get("max_value"),
-                account_numbers=af.get("account_numbers"),
-                must_hold_tickers=af.get("must_hold_tickers")
-            )
+            account_filter = cls._parse_account_filter(data["account_filter"])
         
         cm_data = data.get("cash_management", {})
         cash_management = CashManagement(
