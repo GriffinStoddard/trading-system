@@ -594,11 +594,17 @@ class OrderGenerator:
         # Determine usable cash (respecting minimum)
         usable_cash = max(0, available_cash - min_cash_required)
 
+        # Calculate cash deficit (how much below floor we currently are)
+        cash_deficit = max(0, min_cash_required - available_cash)
+
         # Track already-sold CE shares for iterative selling
         already_sold_ce: dict[str, int] = {}
 
-        # If we need more cash and rule allows selling cash equivalents
-        cash_shortfall = total_cash_needed - usable_cash
+        # Total cash shortfall includes: buys needed + deficit to reach floor
+        cash_shortfall = total_cash_needed + cash_deficit - usable_cash
+
+        # Track total cash raised from CE sales
+        total_ce_cash_raised = 0.0
 
         if cash_shortfall > 0 and rule.sell_cash_equiv_if_needed:
             # Sell cash equivalents to cover shortfall
@@ -610,10 +616,11 @@ class OrderGenerator:
                 already_sold_ce
             )
             ce_sell_orders.extend(ce_orders)
-            usable_cash += cash_raised
+            total_ce_cash_raised += cash_raised
 
-        # Now create buy orders with available cash
-        remaining_cash = usable_cash
+        # Calculate remaining cash for buys: start with available, add CE sales, subtract floor requirement
+        # This ensures we reserve enough to meet the cash floor
+        remaining_cash = max(0, available_cash + total_ce_cash_raised - min_cash_required)
 
         for ticker, shares, cost, curr_shares, curr_value, curr_alloc, target_alloc in buy_needs:
             price = self.stock_prices[ticker]
@@ -635,6 +642,24 @@ class OrderGenerator:
             if cost > remaining_cash:
                 shares = math.floor(remaining_cash / price)
                 cost = shares * price
+
+            # Re-check min_buy_allocation after any reduction in shares
+            if shares > 0 and rule.min_buy_allocation and total_value > 0:
+                buy_allocation = cost / total_value
+                if buy_allocation < rule.min_buy_allocation:
+                    analysis.ticker_analysis.append(TickerAnalysis(
+                        ticker=ticker,
+                        current_shares=curr_shares,
+                        current_value=curr_value,
+                        current_allocation=curr_alloc,
+                        target_allocation=target_alloc,
+                        action="SKIP",
+                        shares_to_trade=0,
+                        estimated_value=0,
+                        new_allocation=curr_alloc,
+                        reason=f"Buy < {rule.min_buy_allocation*100:.1f}% minimum (reduced)"
+                    ))
+                    continue
 
             if shares <= 0:
                 analysis.ticker_analysis.append(TickerAnalysis(
@@ -680,6 +705,24 @@ class OrderGenerator:
                             reason="Would violate cash floor"
                         ))
                         continue
+
+                    # Re-check min_buy_allocation after floor enforcement reduction
+                    if rule.min_buy_allocation and total_value > 0:
+                        buy_allocation = cost / total_value
+                        if buy_allocation < rule.min_buy_allocation:
+                            analysis.ticker_analysis.append(TickerAnalysis(
+                                ticker=ticker,
+                                current_shares=curr_shares,
+                                current_value=curr_value,
+                                current_allocation=curr_alloc,
+                                target_allocation=target_alloc,
+                                action="SKIP",
+                                shares_to_trade=0,
+                                estimated_value=0,
+                                new_allocation=curr_alloc,
+                                reason=f"Buy < {rule.min_buy_allocation*100:.1f}% minimum (floor limit)"
+                            ))
+                            continue
 
             new_value = curr_value + cost
             new_alloc = new_value / total_value
