@@ -213,16 +213,18 @@ class TestAccountEdgeCases:
 class TestAccountParser:
     """Tests for AccountParser - mock-based since it requires Excel files."""
 
-    def test_cash_equivalents_constant(self):
-        """Verify CASH_EQUIVALENTS constant."""
-        from models import AccountParser
-        assert "BIL" in AccountParser.CASH_EQUIVALENTS
-        assert "USFR" in AccountParser.CASH_EQUIVALENTS
-        assert "PJLXX" in AccountParser.CASH_EQUIVALENTS
-        assert len(AccountParser.CASH_EQUIVALENTS) == 3
+    def test_cash_equivalents_from_config(self):
+        """Verify cash equivalents are loaded from config."""
+        from config import get_cash_equivalents
+        cash_equivs = get_cash_equivalents()
+        assert "BIL" in cash_equivs
+        assert "USFR" in cash_equivs
+        assert "PJLXX" in cash_equivs
 
-    def test_account_cash_equiv_symbols_constant(self):
-        """Verify Account.CASH_EQUIV_SYMBOLS constant."""
-        assert "BIL" in Account.CASH_EQUIV_SYMBOLS
-        assert "USFR" in Account.CASH_EQUIV_SYMBOLS
-        assert "PJLXX" in Account.CASH_EQUIV_SYMBOLS
+    def test_account_parser_loads_cash_equivalents(self):
+        """Verify AccountParser loads cash equivalents from config."""
+        from models import AccountParser
+        parser = AccountParser("dummy_path.xlsx")
+        assert "BIL" in parser.cash_equivalents
+        assert "USFR" in parser.cash_equivalents
+        assert "PJLXX" in parser.cash_equivalents
