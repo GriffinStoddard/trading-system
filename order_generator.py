@@ -246,29 +246,58 @@ class OrderGenerator:
         if rule.account_filter and not self._passes_filter(account, rule.account_filter):
             return orders, cash_generated, tickers_sold
 
-        for ticker in rule.tickers:
+        # Handle wildcard - expand to all holdings
+        tickers_to_process = rule.tickers
+        is_wildcard = '*' in rule.tickers or 'ALL' in [t.upper() for t in rule.tickers]
+        if is_wildcard:
+            # Get all holdings (sorted by value for "largest_first" priority)
+            all_holdings = [(h.symbol, h.market_value or 0) for h in account.holdings]
+            if rule.priority == "largest_first":
+                all_holdings.sort(key=lambda x: x[1], reverse=True)
+            tickers_to_process = [h[0] for h in all_holdings]
+
+        # Track cumulative cash raised for DOLLARS quantity type with wildcards
+        cumulative_cash_raised = 0.0
+        target_cash = rule.quantity or 0 if rule.quantity_type == QuantityType.DOLLARS else 0
+
+        for ticker in tickers_to_process:
             ticker = ticker.upper()
-            
+
+            # For DOLLARS type with wildcard, stop once we've raised enough
+            if is_wildcard and rule.quantity_type == QuantityType.DOLLARS and target_cash > 0:
+                if cumulative_cash_raised >= target_cash:
+                    break
+
             # Check regular holdings
             holding = account.get_holding(ticker)
             if not holding:
                 # Check cash equivalents
                 holding = account.get_cash_equivalent(ticker)
-            
+
             if not holding or holding.shares <= 0:
                 continue
-            
+
             # Calculate shares to sell based on quantity type
-            shares_to_sell = self._calculate_sell_shares(
-                holding, rule, account.get_total_value()
-            )
-            
+            # For DOLLARS with wildcard, calculate based on remaining cash needed
+            if is_wildcard and rule.quantity_type == QuantityType.DOLLARS and target_cash > 0:
+                remaining_needed = target_cash - cumulative_cash_raised
+                shares_to_sell = self._calculate_sell_shares_for_amount(
+                    holding, remaining_needed, rule
+                )
+            else:
+                shares_to_sell = self._calculate_sell_shares(
+                    holding, rule, account.get_total_value()
+                )
+
             if shares_to_sell <= 0:
                 continue
-            
+
             # Get price
             price = holding.price or self.stock_prices.get(ticker, 0)
             estimated_value = shares_to_sell * price
+
+            # Track cumulative cash for wildcard DOLLARS
+            cumulative_cash_raised += estimated_value
             
             order = Order(
                 account_num=account.account_num,
@@ -335,13 +364,44 @@ class OrderGenerator:
         if rule.min_shares_remaining:
             max_sellable = int(holding.shares) - rule.min_shares_remaining
             shares = min(shares, max(0, max_sellable))
-        
+
         if rule.max_percent_of_position:
             max_from_pct = int(holding.shares * rule.max_percent_of_position)
             shares = min(shares, max_from_pct)
-        
+
         return max(0, shares)
-    
+
+    def _calculate_sell_shares_for_amount(
+        self,
+        holding: Holding,
+        amount_needed: float,
+        rule: SellRule
+    ) -> int:
+        """Calculate shares to sell to raise a specific dollar amount.
+
+        Used for DOLLARS quantity type with wildcards where we track cumulative cash.
+        """
+        price = holding.price or self.stock_prices.get(holding.symbol, 0)
+        if price <= 0:
+            return 0
+
+        # Calculate shares needed to raise the amount
+        shares = math.ceil(amount_needed / price)
+
+        # Don't sell more than we have
+        shares = min(shares, int(holding.shares))
+
+        # Apply constraints from rule
+        if rule.min_shares_remaining:
+            max_sellable = int(holding.shares) - rule.min_shares_remaining
+            shares = min(shares, max(0, max_sellable))
+
+        if rule.max_percent_of_position:
+            max_from_pct = int(holding.shares * rule.max_percent_of_position)
+            shares = min(shares, max_from_pct)
+
+        return max(0, shares)
+
     def _process_buy_rule(
         self,
         account: Account,
@@ -506,8 +566,28 @@ class OrderGenerator:
                 continue
             
             cost = shares_to_buy * price
+
+            # Check minimum buy allocation threshold BEFORE adding to buy_needs
+            # This ensures we don't sell CEs for buys that will be skipped
+            if rule.min_buy_allocation and total_value > 0:
+                buy_allocation = cost / total_value
+                if buy_allocation < rule.min_buy_allocation:
+                    analysis.ticker_analysis.append(TickerAnalysis(
+                        ticker=ticker,
+                        current_shares=current_shares,
+                        current_value=current_value,
+                        current_allocation=current_alloc,
+                        target_allocation=target_alloc,
+                        action="SKIP",
+                        shares_to_trade=0,
+                        estimated_value=0,
+                        new_allocation=current_alloc,
+                        reason=f"Buy < {rule.min_buy_allocation*100:.1f}% minimum"
+                    ))
+                    continue
+
             buy_needs.append((ticker, shares_to_buy, cost, current_shares, current_value, current_alloc, target_alloc))
-        
+
         # Calculate total cash needed
         total_cash_needed = sum(need[2] for need in buy_needs)
 
@@ -571,24 +651,6 @@ class OrderGenerator:
                 ))
                 analysis.warnings.append(f"Insufficient cash to buy {ticker}")
                 continue
-
-            # Check minimum buy allocation threshold
-            if rule.min_buy_allocation and total_value > 0:
-                buy_allocation = cost / total_value
-                if buy_allocation < rule.min_buy_allocation:
-                    analysis.ticker_analysis.append(TickerAnalysis(
-                        ticker=ticker,
-                        current_shares=curr_shares,
-                        current_value=curr_value,
-                        current_allocation=curr_alloc,
-                        target_allocation=target_alloc,
-                        action="SKIP",
-                        shares_to_trade=0,
-                        estimated_value=0,
-                        new_allocation=curr_alloc,
-                        reason=f"Buy < {rule.min_buy_allocation*100:.1f}% minimum"
-                    ))
-                    continue
 
             # Check cash floor enforcement (unless using proceeds only)
             if not use_proceeds_only and min_cash_required > 0:

@@ -17,7 +17,8 @@ DEFAULT_CONFIG = {
     "cash_equivalents": ["BIL", "USFR", "PJLXX", "JAAA"],
     "default_cash_floor_percent": 0.02,
     "default_target_allocation_percent": 0.025,
-    "default_skip_if_above_percent": 0.02
+    "default_skip_if_above_percent": 0.02,
+    "default_min_buy_percent": 0.01
 }
 
 

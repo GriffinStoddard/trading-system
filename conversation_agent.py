@@ -137,6 +137,10 @@ class ConversationAgent:
         if 'api key' in lower or 'api-key' in lower or 'apikey' in lower:
             return IntentType.COMMAND
 
+        # Check for "use default" - route directly to trade request (bypass LLM)
+        if 'default' in lower or 'use standard' in lower:
+            return IntentType.TRADE_REQUEST
+
         # Use LLM for intent detection
         try:
             import anthropic
@@ -151,7 +155,7 @@ class ConversationAgent:
             prompt = f"""Classify this user message into exactly one of these categories:
 
 QUESTION - Asking about how the program works, what it can do, explaining concepts, asking for information
-TRADE_REQUEST - Requesting to generate trades, buy/sell orders, rebalancing, using default specification
+TRADE_REQUEST - Requesting to generate trades, buy/sell orders, rebalancing, raise cash, liquidate positions, using default specification
 COMMAND - System commands: help, exit, quit, settings, api key, show holdings, show summary, show buy list, view data
 UNCLEAR - Ambiguous message that doesn't fit other categories, greetings, thanks, etc.
 
@@ -196,7 +200,7 @@ Respond with ONLY the category name (QUESTION, TRADE_REQUEST, COMMAND, or UNCLEA
         if '?' in lower or any(q in lower for q in ['how', 'what', 'why', 'explain']):
             return IntentType.QUESTION
 
-        if any(t in lower for t in ['buy', 'sell', 'trade', 'default', 'order']):
+        if any(t in lower for t in ['buy', 'sell', 'trade', 'default', 'order', 'raise']):
             return IntentType.TRADE_REQUEST
 
         return IntentType.UNCLEAR
@@ -443,10 +447,12 @@ What else can I help you with?"""
         target_alloc = self.config.get("default_target_allocation_percent", 0.025)
         skip_above = self.config.get("default_skip_if_above_percent", 0.02)
         cash_floor = self.config.get("default_cash_floor_percent", 0.02)
+        min_buy = self.config.get("default_min_buy_percent", 0.01)
 
         plan = ExecutionPlan(
             description=f"Buy to {target_alloc*100}% target allocation per stock. Skip if >= {skip_above*100}% owned. "
-                        f"Sell cash equivalents (largest first) if needed. Maintain {cash_floor*100}% cash floor.",
+                        f"Skip buys under {min_buy*100}% of account. Sell cash equivalents (largest first) if needed. "
+                        f"Maintain {cash_floor*100}% cash floor.",
             buy_rules=[
                 BuyRule(
                     tickers=self.buy_list,
@@ -456,7 +462,8 @@ What else can I help you with?"""
                     skip_if_allocation_above=skip_above,
                     buy_only_to_target=True,
                     cash_source=CashSource.CASH_EQUIVALENTS,
-                    sell_cash_equiv_if_needed=True
+                    sell_cash_equiv_if_needed=True,
+                    min_buy_allocation=min_buy
                 )
             ],
             cash_management=CashManagement(

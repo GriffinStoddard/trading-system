@@ -88,6 +88,7 @@ You must output valid JSON matching this schema:
 4. When told to maintain X% cash, set `min_cash_percent` to that value
 5. When told to sell cash equivalents if needed, set `sell_cash_equiv_if_needed: true`
 6. Always set `sells_before_buys: true` unless explicitly told otherwise
+7. DEFAULT: Always set `min_buy_allocation: 0.01` (1%) unless the user specifies a different minimum or says "no minimum"
 
 ## CONDITIONAL SELL-THEN-BUY
 
@@ -124,12 +125,14 @@ Use `exclude_client_names` to EXCLUDE accounts by client name:
 - Matching is case-insensitive
 - Useful when user says "except for client X" or "not for accounts named Y"
 
-## MINIMUM BUY SIZE
+## MINIMUM BUY SIZE (DEFAULT: 1%)
 
 Use `min_buy_allocation` in buy_rules to skip small buys:
 - Decimal value (0.01 = 1% of account)
 - If the calculated buy amount is less than this percentage of the account, the buy is skipped
-- Useful when user says "skip buys under X% of account value"
+- **DEFAULT: Always include `min_buy_allocation: 0.01` unless user specifies otherwise**
+- If user says "skip buys under X%", use that value instead
+- If user says "no minimum" or "don't skip small buys", set to null or 0
 
 ## EXAMPLES
 
@@ -137,7 +140,7 @@ Use `min_buy_allocation` in buy_rules to skip small buys:
 
 ```json
 {{
-  "description": "Buy to 2.5% allocation per ticker, skip existing positions >= 2%, liquidate cash equivalents if needed, maintain 2% cash floor",
+  "description": "Buy to 2.5% allocation per ticker, skip existing positions >= 2%, skip buys under 1%, liquidate cash equivalents if needed, maintain 2% cash floor",
   "sell_rules": [],
   "buy_rules": [
     {{
@@ -148,7 +151,8 @@ Use `min_buy_allocation` in buy_rules to skip small buys:
       "skip_if_allocation_above": 0.02,
       "buy_only_to_target": true,
       "cash_source": "cash_equivalents",
-      "sell_cash_equiv_if_needed": true
+      "sell_cash_equiv_if_needed": true,
+      "min_buy_allocation": 0.01
     }}
   ],
   "account_filter": null,
@@ -185,7 +189,8 @@ Use `min_buy_allocation` in buy_rules to skip small buys:
       "skip_if_allocation_above": null,
       "buy_only_to_target": false,
       "cash_source": "available_cash",
-      "sell_cash_equiv_if_needed": false
+      "sell_cash_equiv_if_needed": false,
+      "min_buy_allocation": 0.01
     }}
   ],
   "account_filter": null,
@@ -255,7 +260,8 @@ Use `min_buy_allocation` in buy_rules to skip small buys:
       "buy_only_if_sold": ["GOOGL"],
       "use_proceeds_from_sale": true,
       "cash_source": "available_cash",
-      "sell_cash_equiv_if_needed": false
+      "sell_cash_equiv_if_needed": false,
+      "min_buy_allocation": 0.01
     }}
   ],
   "account_filter": null,
@@ -556,23 +562,32 @@ class LLMInterpreter:
         Fallback interpreter for when API is not available.
         Handles the most common case: buy to target with cash equivalent liquidation.
         """
-        # Default plan matching the user's Specification 1
+        # Load defaults from config
+        from config import load_config
+        config = load_config()
+        target_alloc = config.get("default_target_allocation_percent", 0.025)
+        skip_above = config.get("default_skip_if_above_percent", 0.02)
+        cash_floor = config.get("default_cash_floor_percent", 0.02)
+        min_buy = config.get("default_min_buy_percent", 0.01)
+
         return ExecutionPlan(
-            description="Buy to 2.5% target allocation, skip if >= 2%, sell cash equivalents if needed, maintain 2% cash",
+            description=f"Buy to {target_alloc*100}% target allocation, skip if >= {skip_above*100}%, "
+                        f"skip buys under {min_buy*100}%, sell cash equivalents if needed, maintain {cash_floor*100}% cash",
             buy_rules=[
                 BuyRule(
                     tickers=buy_list,
                     quantity_type=QuantityType.PERCENT_OF_ACCOUNT,
-                    quantity=0.025,
+                    quantity=target_alloc,
                     allocation_method=AllocationMethod.EQUAL_WEIGHT,
-                    skip_if_allocation_above=0.02,
+                    skip_if_allocation_above=skip_above,
                     buy_only_to_target=True,
                     cash_source=CashSource.CASH_EQUIVALENTS,
-                    sell_cash_equiv_if_needed=True
+                    sell_cash_equiv_if_needed=True,
+                    min_buy_allocation=min_buy
                 )
             ],
             cash_management=CashManagement(
-                min_cash_percent=0.02,
+                min_cash_percent=cash_floor,
                 cash_equiv_sell_order="largest_first"
             )
         )
