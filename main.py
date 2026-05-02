@@ -29,7 +29,7 @@ from config import load_config, save_config, get_api_key
 
 
 # Version info
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 
 
 def play_startup_sound():
