@@ -169,6 +169,7 @@ Respond with ONLY the category name (QUESTION, TRADE_REQUEST, COMMAND, or UNCLEA
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=20,
+                temperature=0,
                 messages=[{"role": "user", "content": prompt}]
             )
 
@@ -267,6 +268,7 @@ Answer the user's question based on this knowledge base and the current portfoli
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=1024,
+                temperature=0,
                 system=system_prompt,
                 messages=[{"role": "user", "content": question}]
             )
@@ -523,6 +525,7 @@ Respond naturally and helpfully, and guide them toward what you can help with.
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=300,
+                temperature=0,
                 system=system_prompt,
                 messages=[{"role": "user", "content": message}]
             )

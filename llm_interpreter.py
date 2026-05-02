@@ -489,6 +489,7 @@ class LLMInterpreter:
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=4096,
+                temperature=0,
                 system=get_system_prompt(self.cash_equivalents),
                 messages=[
                     {"role": "user", "content": user_message}
@@ -704,6 +705,7 @@ class ConversationalInterpreter(LLMInterpreter):
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=50,
+                temperature=0,
                 messages=[{"role": "user", "content": prompt}]
             )
 
@@ -771,6 +773,7 @@ class ConversationalInterpreter(LLMInterpreter):
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=500,
+                temperature=0,
                 messages=[{"role": "user", "content": prompt}]
             )
 
