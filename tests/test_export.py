@@ -44,6 +44,15 @@ class TestExportOrders:
         assert df_second["Share Quantity"].tolist() == [99]
         assert (first / "trade_report.txt").read_text() == "report 1"
 
+    def test_account_numbers_have_no_hyphens(self, base):
+        """Broker upload needs bare account numbers — display hyphens are stripped."""
+        order = Order(account_num="2527-3072", client_name="Pat", security="AAPL",
+                      action="Buy", shares=5, estimated_value=500.0)
+        _, _, folder = export_orders([order], [order])
+        for name in ("sell_order.csv", "buy_order.csv"):
+            df = pd.read_csv(folder / name, dtype=str)
+            assert df["Account Number"].tolist() == ["25273072"]
+
     def test_empty_orders_still_write_headers(self, base):
         _, _, folder = export_orders([], [])
         df = pd.read_csv(folder / "sell_order.csv")

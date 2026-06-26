@@ -120,7 +120,8 @@ def export_orders(sell_orders: list, buy_orders: list) -> tuple[str, str, Path]:
         if not orders:
             return pd.DataFrame(columns=ORDER_COLUMNS)
         return pd.DataFrame([{
-            "Account Number": o.account_num,
+            # Broker upload requires bare account numbers — strip the display hyphens.
+            "Account Number": str(o.account_num).replace("-", ""),
             "Security": o.security,
             "Action": o.action,
             "Share Quantity": o.shares,
