@@ -102,7 +102,7 @@ if IS_MAC:
         info_plist={
             'CFBundleName': 'TradingSystem',
             'CFBundleDisplayName': 'Trading System',
-            'CFBundleShortVersionString': '3.6.0',
+            'CFBundleShortVersionString': '3.6.1',
             'NSHighResolutionCapable': True,
             'NSRequiresAquaSystemAppearance': False,
         },

@@ -25,7 +25,7 @@ from config import (load_config, get_api_key, set_api_key,
 from models import AccountParser
 import paths
 
-VERSION = "3.6.0"
+VERSION = "3.6.1"
 
 
 def data_dir() -> Path:

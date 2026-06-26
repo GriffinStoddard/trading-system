@@ -21,7 +21,7 @@ from config import load_config, get_api_key, get_investment_data_path, get_expor
 import paths
 import ui
 
-VERSION = "3.6.0"
+VERSION = "3.6.1"
 
 
 def get_base_path() -> Path:
