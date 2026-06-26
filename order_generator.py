@@ -10,9 +10,16 @@ from dataclasses import dataclass, field
 from typing import Optional
 from models import Account, Holding
 from execution_plan import (
-    ExecutionPlan, BuyRule, SellRule, 
+    ExecutionPlan, BuyRule, SellRule,
     QuantityType, CashSource, AllocationMethod
 )
+
+# Sell-rule ticker tokens that mean "every cash-equivalent holding in the
+# account" — used to liquidate the cash-equivalent basket as standalone sells.
+CE_WILDCARD_TOKENS = {
+    "CASH_EQUIVALENTS", "CASH_EQUIVALENT", "CASH EQUIVALENTS",
+    "CASH_EQUIVS", "CASH_EQUIV", "CASH-EQUIVALENTS", "*CE*", "CE",
+}
 
 
 @dataclass
@@ -180,13 +187,24 @@ class OrderGenerator:
             )
 
             # Check if final cash is below the floor
-            min_cash_required = analysis.total_value * plan.cash_management.min_cash_percent
+            pct_floor = analysis.total_value * plan.cash_management.min_cash_percent
+            min_cash_required = pct_floor
             if plan.cash_management.min_cash_dollars:
                 min_cash_required = max(min_cash_required, plan.cash_management.min_cash_dollars)
             if analysis.cash_after < min_cash_required:
+                # Spell out what each figure means: the first is the projected
+                # CASH balance after the trades (cash only, not cash equivalents);
+                # the second is the required floor. Note the floor's basis so the
+                # numbers aren't bare.
+                if min_cash_required > pct_floor:
+                    basis = "the configured cash minimum"
+                else:
+                    basis = (f"{plan.cash_management.min_cash_percent*100:.0f}% of the "
+                             f"${analysis.total_value:,.0f} account")
                 analysis.warnings.append(
-                    f"Below {plan.cash_management.min_cash_percent*100:.0f}% cash floor "
-                    f"(${analysis.cash_after:,.2f} < ${min_cash_required:,.2f})"
+                    f"Below cash floor — ${analysis.cash_after:,.2f} = projected cash "
+                    f"after the trades, while ${min_cash_required:,.2f} = required "
+                    f"cash floor ({basis})"
                 )
 
             self.analyses.append(analysis)
@@ -246,15 +264,33 @@ class OrderGenerator:
         if rule.account_filter and not self._passes_filter(account, rule.account_filter):
             return orders, cash_generated, tickers_sold
 
-        # Handle wildcard - expand to all holdings
+        # Handle wildcards.
+        #   "*" / "ALL"            -> every regular stock holding
+        #   "CASH_EQUIVALENTS"     -> every cash-equivalent holding (sold as a
+        #                             standalone sell, i.e. moved to cash — not
+        #                             merely drawn down to fund buys)
+        # A cash-equivalent wildcard is the explicit way to liquidate the
+        # cash-equivalent basket; the plain "*" wildcard intentionally covers
+        # only regular holdings (cash equivalents are already cash-like).
         tickers_to_process = rule.tickers
-        is_wildcard = '*' in rule.tickers or 'ALL' in [t.upper() for t in rule.tickers]
-        if is_wildcard:
-            # Get all holdings (sorted by value for "largest_first" priority)
-            all_holdings = [(h.symbol, h.market_value or 0) for h in account.holdings]
-            if rule.priority == "largest_first":
-                all_holdings.sort(key=lambda x: x[1], reverse=True)
-            tickers_to_process = [h[0] for h in all_holdings]
+        upper_tickers = [t.upper() for t in rule.tickers]
+        is_holdings_wildcard = '*' in rule.tickers or 'ALL' in upper_tickers
+        is_ce_wildcard = bool(CE_WILDCARD_TOKENS.intersection(upper_tickers))
+
+        if is_holdings_wildcard:
+            positions = [(h.symbol, h.market_value or 0) for h in account.holdings]
+        elif is_ce_wildcard:
+            positions = [(ce.symbol, ce.market_value or 0) for ce in account.cash_equivalents]
+        else:
+            positions = None
+
+        if positions is not None:
+            # Order by value: largest first (default) minimizes the number of
+            # orders needed to hit a dollar target; smallest first if requested.
+            positions.sort(key=lambda x: x[1], reverse=(rule.priority != "smallest_first"))
+            tickers_to_process = [p[0] for p in positions]
+
+        is_wildcard = is_holdings_wildcard or is_ce_wildcard
 
         # Track cumulative cash raised for DOLLARS quantity type with wildcards
         cumulative_cash_raised = 0.0

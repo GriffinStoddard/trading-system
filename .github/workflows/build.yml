@@ -1,46 +1,67 @@
 name: Build and Release
 
+# Triggers:
+#   push to main      -> build both exes, upload as a downloadable artifact (CI build)
+#   workflow_dispatch -> manual build from the Actions tab, same artifact (no tag needed)
+#   push tag v*       -> build + attach a ZIP to a GitHub Release
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Minimum scope to create a Release and upload assets with the default GITHUB_TOKEN.
+permissions:
+  contents: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
-    
-    - name: Build executable
-      run: |
-        pyinstaller --onefile --console --name TradingSystem main.py
-    
-    - name: Copy config files
-      run: |
-        copy config.json dist\config.json
-        copy stock_prices.csv dist\stock_prices.csv
+      - name: Checkout code
+        uses: actions/checkout@v5
 
-    - name: Package release
-      run: |
-        cd dist
-        Compress-Archive -Path TradingSystem.exe, config.json, stock_prices.csv -DestinationPath TradingSystem-${{ github.ref_name }}-windows.zip
-    
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/TradingSystem-${{ github.ref_name }}-windows.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          # Do NOT use 3.13+: pythonnet (the pywebview WinForms/EdgeChromium
+          # backend) does not yet support it and crashes at runtime.
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install "pyinstaller>=6.0" "pyinstaller-hooks-contrib>=2024.0"
+
+      - name: Run tests
+        run: pytest tests/
+
+      - name: Build GUI + CLI executables (platform-aware spec)
+        run: pyinstaller trading_system.spec
+
+      - name: Verify expected artifacts exist
+        run: |
+          if (-not (Test-Path dist/TradingSystem.exe))    { throw "dist/TradingSystem.exe missing" }
+          if (-not (Test-Path dist/TradingSystemCLI.exe)) { throw "dist/TradingSystemCLI.exe missing" }
+
+      - name: Upload build artifacts (every run — main push, manual, and tags)
+        uses: actions/upload-artifact@v4
+        with:
+          name: TradingSystem-windows
+          path: |
+            dist/TradingSystem.exe
+            dist/TradingSystemCLI.exe
+          if-no-files-found: error
+
+      - name: Package release ZIP
+        if: startsWith(github.ref, 'refs/tags/')
+        run: Compress-Archive -Path dist/TradingSystem.exe, dist/TradingSystemCLI.exe -DestinationPath TradingSystem-${{ github.ref_name }}-windows.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TradingSystem-${{ github.ref_name }}-windows.zip
+          generate_release_notes: true

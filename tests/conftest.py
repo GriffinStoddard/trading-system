@@ -9,7 +9,18 @@ from pathlib import Path
 # Add parent directory to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import paths
 from models import Account, Holding
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_dirs(tmp_path_factory, monkeypatch):
+    """Keep every test away from the real per-user data and Documents dirs."""
+    appdata = tmp_path_factory.mktemp("appdata")
+    exports = tmp_path_factory.mktemp("exports")
+    monkeypatch.setattr(paths, "user_data_dir", lambda: appdata)
+    monkeypatch.setattr(paths, "default_exports_dir", lambda: exports)
+    return appdata
 from execution_plan import (
     ExecutionPlan, BuyRule, SellRule, AccountFilter, CashManagement,
     QuantityType, AllocationMethod, CashSource

@@ -1,423 +1,591 @@
 """
-Tests for the ConversationAgent (v2.0 conversational interface)
+Tests for the conversation agent (v3 tool-use architecture).
+
+Everything tested here runs locally — no API calls. The Claude loop itself is
+exercised through its tool handlers (_tool_propose_plan, _tool_account_details),
+which is where all the deterministic logic lives.
 """
 
 import pytest
+
 from conversation_agent import (
-    ConversationAgent, IntentType, ConversationState
+    ConversationAgent, ConversationState, AgentReply,
 )
 from models import Account, Holding
 from system_knowledge import SYSTEM_KNOWLEDGE, CAPABILITIES_SUMMARY, WELCOME_MESSAGE
+from plan_schema import EXECUTION_PLAN_SCHEMA
 
 
-class TestIntentType:
-    """Test IntentType enum values."""
+# =============================================================================
+# Fixtures
+# =============================================================================
 
-    def test_all_intent_types_exist(self):
-        """Verify all expected intent types are defined."""
-        assert IntentType.QUESTION.value == "question"
-        assert IntentType.TRADE_REQUEST.value == "trade_request"
-        assert IntentType.CLARIFICATION_RESPONSE.value == "clarification"
-        assert IntentType.COMMAND.value == "command"
-        assert IntentType.CONFIRMATION.value == "confirmation"
-        assert IntentType.UNCLEAR.value == "unclear"
+@pytest.fixture
+def sample_accounts():
+    account = Account(account_num="12345", client_name="Test Client")
+    account.cash = 10000.0
+    account.add_holding(Holding("AAPL", 100, 150.0, 15000.0))
+    account.add_cash_equivalent(Holding("BIL", 200, 100.0, 20000.0))
+    return {"12345": account}
 
 
-class TestConversationState:
-    """Test ConversationState dataclass."""
+@pytest.fixture
+def sample_prices():
+    return {"GOOGL": 100.0, "MSFT": 300.0, "AAPL": 150.0}
 
-    def test_default_state(self):
-        """Test default state values."""
-        state = ConversationState()
-        assert state.messages == []
-        assert state.pending_trade is None
-        assert state.awaiting_clarification is False
-        assert state.clarification_questions == []
-        assert state.awaiting_confirmation is False
-        assert state.pending_plan is None
-        assert state.pending_orders is None
 
+@pytest.fixture
+def sample_buy_list():
+    return ["GOOGL", "MSFT"]
+
+
+@pytest.fixture
+def sample_config():
+    return {
+        "default_target_allocation_percent": 0.025,
+        "default_skip_if_above_percent": 0.02,
+        "default_cash_floor_percent": 0.02,
+        "default_min_buy_percent": 0.0,
+        "cash_equivalents": ["BIL", "USFR", "PJLXX"],
+    }
+
+
+@pytest.fixture
+def agent(sample_accounts, sample_prices, sample_buy_list, sample_config):
+    a = ConversationAgent(sample_accounts, sample_prices, sample_buy_list, sample_config)
+    a.api_key = ""  # force local-only behavior in tests
+    return a
+
+
+def make_plan_dict(**overrides):
+    """A minimal valid plan dict matching the strict schema."""
+    plan = {
+        "description": "Buy GOOGL to 5%",
+        "sell_rules": [],
+        "buy_rules": [{
+            "tickers": ["GOOGL"],
+            "quantity_type": "percent_of_account",
+            "quantity": 0.05,
+            "allocation_method": "equal_weight",
+            "skip_if_allocation_above": None,
+            "buy_only_to_target": True,
+            "buy_only_if_sold": None,
+            "use_proceeds_from_sale": False,
+            "cash_source": "available_cash",
+            "sell_cash_equiv_if_needed": False,
+            "min_buy_allocation": None,
+        }],
+        "account_filter": None,
+        "cash_management": {
+            "min_cash_percent": 0.02,
+            "min_cash_dollars": None,
+            "cash_equiv_sell_order": "largest_first",
+        },
+        "sells_before_buys": True,
+    }
+    plan.update(overrides)
+    return plan
+
+
+# =============================================================================
+# Knowledge base
+# =============================================================================
 
 class TestSystemKnowledge:
-    """Test system knowledge content."""
-
-    def test_system_knowledge_exists(self):
-        """Verify system knowledge is not empty."""
-        assert len(SYSTEM_KNOWLEDGE) > 100
+    def test_knowledge_exists(self):
+        assert len(SYSTEM_KNOWLEDGE) > 500
 
     def test_capabilities_summary_exists(self):
-        """Verify capabilities summary is not empty."""
         assert len(CAPABILITIES_SUMMARY) > 50
 
     def test_welcome_message_exists(self):
-        """Verify welcome message is not empty."""
         assert len(WELCOME_MESSAGE) > 50
-        assert "2.2.0" in WELCOME_MESSAGE
 
-    def test_system_knowledge_contains_key_concepts(self):
-        """Verify system knowledge covers key concepts."""
-        assert "cash floor" in SYSTEM_KNOWLEDGE.lower()
-        assert "cash equivalent" in SYSTEM_KNOWLEDGE.lower()
-        assert "target allocation" in SYSTEM_KNOWLEDGE.lower()
+    def test_knowledge_contains_key_concepts(self):
+        lower = SYSTEM_KNOWLEDGE.lower()
+        assert "cash floor" in lower
+        assert "cash equivalent" in lower
+        assert "target allocation" in lower
 
 
-class TestConversationAgentSetup:
-    """Test ConversationAgent initialization."""
+class TestPlanSchema:
+    def test_schema_is_strict(self):
+        assert EXECUTION_PLAN_SCHEMA["additionalProperties"] is False
+        assert set(EXECUTION_PLAN_SCHEMA["required"]) == set(
+            EXECUTION_PLAN_SCHEMA["properties"].keys())
 
-    @pytest.fixture
-    def sample_accounts(self):
-        """Create sample accounts for testing."""
-        account = Account(account_num="12345", client_name="Test Client")
-        account.cash = 10000.0
-        account.add_holding(Holding("AAPL", 100, 150.0, 15000.0))
-        account.add_cash_equivalent(Holding("BIL", 200, 100.0, 20000.0))
-        return {"12345": account}
+    def test_schema_round_trips_through_execution_plan(self):
+        from execution_plan import ExecutionPlan
+        plan = ExecutionPlan.from_dict(make_plan_dict())
+        assert plan.description == "Buy GOOGL to 5%"
+        assert len(plan.buy_rules) == 1
+        assert plan.buy_rules[0].tickers == ["GOOGL"]
 
-    @pytest.fixture
-    def sample_prices(self):
-        """Create sample stock prices."""
-        return {"GOOGL": 100.0, "MSFT": 300.0, "AAPL": 150.0}
 
-    @pytest.fixture
-    def sample_buy_list(self):
-        """Create sample buy list."""
-        return ["GOOGL", "MSFT"]
+# =============================================================================
+# Setup
+# =============================================================================
 
-    @pytest.fixture
-    def sample_config(self):
-        """Create sample config."""
-        return {
-            "default_target_allocation_percent": 0.025,
-            "default_skip_if_above_percent": 0.02,
-            "default_cash_floor_percent": 0.02,
-            "cash_equivalents": ["BIL", "USFR", "PJLXX"]
-        }
-
-    @pytest.fixture
-    def agent(self, sample_accounts, sample_prices, sample_buy_list, sample_config):
-        """Create a ConversationAgent for testing."""
-        return ConversationAgent(
-            sample_accounts, sample_prices, sample_buy_list, sample_config
-        )
-
+class TestAgentSetup:
     def test_agent_initialization(self, agent, sample_accounts, sample_buy_list):
-        """Test agent initializes correctly."""
         assert agent.accounts == sample_accounts
         assert agent.buy_list == sample_buy_list
         assert agent.should_exit is False
         assert isinstance(agent.state, ConversationState)
 
-    def test_get_welcome_message(self, agent):
-        """Test welcome message is returned."""
-        welcome = agent.get_welcome_message()
-        assert "2.2.0" in welcome
-        assert "Conversational" in welcome
+    def test_default_state(self):
+        state = ConversationState()
+        assert state.messages == []
+        assert state.awaiting_confirmation is False
+        assert state.pending_plan is None
+        assert state.pending_orders is None
 
 
-class TestIntentDetection:
-    """Test intent detection logic (using fallback without API key)."""
+# =============================================================================
+# Local commands
+# =============================================================================
 
-    @pytest.fixture
-    def agent(self):
-        """Create a minimal agent for intent detection testing."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0},
-            ["GOOGL"],
-            {}
-        )
-
-    def test_detect_exit_command(self, agent):
-        """Test exit command detection."""
-        # These use direct string matching, not LLM
-        assert agent._detect_intent("exit") == IntentType.COMMAND
-        assert agent._detect_intent("quit") == IntentType.COMMAND
-        assert agent._detect_intent("goodbye") == IntentType.COMMAND
-
-    def test_detect_help_command(self, agent):
-        """Test help command detection via fallback."""
-        # Without API key, uses fallback which checks for 'help' in string
-        intent = agent._detect_intent_fallback("help")
-        assert intent == IntentType.COMMAND
-
-    def test_detect_holdings_command(self, agent):
-        """Test holdings command detection via fallback."""
-        assert agent._detect_intent_fallback("show holdings") == IntentType.COMMAND
-        assert agent._detect_intent_fallback("holdings") == IntentType.COMMAND
-
-    def test_detect_summary_command(self, agent):
-        """Test summary command detection via fallback."""
-        assert agent._detect_intent_fallback("summary") == IntentType.COMMAND
-
-    def test_detect_question(self, agent):
-        """Test question detection via fallback."""
-        assert agent._detect_intent_fallback("how does the cash floor work?") == IntentType.QUESTION
-        assert agent._detect_intent_fallback("what are cash equivalents?") == IntentType.QUESTION
-
-    def test_detect_trade_request(self, agent):
-        """Test trade request detection via fallback."""
-        assert agent._detect_intent_fallback("buy the stocks on my list") == IntentType.TRADE_REQUEST
-        assert agent._detect_intent_fallback("sell all LUMN") == IntentType.TRADE_REQUEST
-        assert agent._detect_intent_fallback("use default") == IntentType.TRADE_REQUEST
-
-    def test_detect_unclear(self, agent):
-        """Test unclear message detection via fallback."""
-        assert agent._detect_intent_fallback("hello there") == IntentType.UNCLEAR
-        assert agent._detect_intent_fallback("thanks") == IntentType.UNCLEAR
-
-
-class TestCommandHandling:
-    """Test command handling."""
-
-    @pytest.fixture
-    def agent(self):
-        """Create agent for command testing."""
-        account = Account(account_num="12345", client_name="Test Client")
-        account.cash = 10000.0
-        account.add_holding(Holding("AAPL", 100, 150.0, 15000.0))
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0, "MSFT": 300.0},
-            ["GOOGL", "MSFT"],
-            {}
-        )
-
-    def test_exit_command_sets_flag(self, agent):
-        """Test that exit command sets should_exit flag."""
-        response = agent.chat("exit")
+class TestLocalCommands:
+    def test_exit_sets_flag(self, agent):
+        reply = agent.chat("exit")
         assert agent.should_exit is True
-        assert "Goodbye" in response
+        assert isinstance(reply, AgentReply)
 
-    def test_help_command_returns_capabilities(self, agent):
-        """Test help command returns capabilities."""
-        response = agent.chat("help")
-        assert "Generate Trade Orders" in response or "trade" in response.lower()
+    @pytest.mark.parametrize("word", ["quit", "bye", "goodbye"])
+    def test_exit_variants(self, agent, word):
+        agent.chat(word)
+        assert agent.should_exit is True
 
-    def test_holdings_command_shows_holdings(self, agent):
-        """Test holdings command shows account holdings."""
-        response = agent.chat("show holdings")
-        assert "12345" in response
-        assert "AAPL" in response
+    def test_help_returns_help_view(self, agent):
+        assert agent.chat("help").view == "help"
 
-    def test_summary_command_shows_summary(self, agent):
-        """Test summary command shows account summary."""
-        response = agent.chat("summary")
-        assert "12345" in response
-        assert "Total Value" in response
+    def test_holdings_view(self, agent):
+        assert agent.chat("holdings").view == "holdings"
+        assert agent.chat("show holdings").view == "holdings"
 
-    def test_buy_list_command(self, agent):
-        """Test buy list command shows buy list."""
-        response = agent.chat("show buy list")
-        assert "GOOGL" in response
-        assert "MSFT" in response
+    def test_summary_view(self, agent):
+        assert agent.chat("summary").view == "summary"
 
+    def test_buy_list_view(self, agent):
+        assert agent.chat("buy list").view == "buy_list"
+        assert agent.chat("prices").view == "buy_list"
 
-class TestQuestionHandling:
-    """Test question handling (requires API key for full functionality)."""
+    def test_unknown_text_without_api_key(self, agent):
+        reply = agent.chat("please rebalance everything")
+        assert "API key" in reply.text
 
-    @pytest.fixture
-    def agent(self):
-        """Create agent for question testing (no API key - limited functionality)."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0},
-            ["GOOGL"],
-            {}
-        )
-
-    def test_question_returns_response(self, agent):
-        """Test that questions return some response (even without API key)."""
-        response = agent.chat("how does the cash floor work?")
-        # Without API key, should return an error message or fallback
-        assert response is not None
-        assert len(response) > 0
-
-    def test_question_handling_does_not_crash(self, agent):
-        """Test that question handling doesn't crash without API key."""
-        # These should not raise exceptions
-        response1 = agent.chat("what are cash equivalents?")
-        response2 = agent.chat("what are the output files?")
-        assert response1 is not None
-        assert response2 is not None
-
-    def test_portfolio_context_built(self, agent):
-        """Test that portfolio context is built correctly."""
-        context = agent._build_portfolio_context()
-        assert "12345" in context
-        assert "10,000" in context or "10000" in context
+    def test_api_key_status_when_unset(self, agent):
+        reply = agent.chat("api key")
+        assert "No API key" in reply.text
 
 
-class TestConversationFlow:
-    """Test multi-turn conversation flows."""
+# =============================================================================
+# Default trade flow
+# =============================================================================
 
-    @pytest.fixture
-    def agent(self):
-        """Create agent for conversation flow testing."""
-        account = Account(account_num="12345", client_name="Test Client")
-        account.cash = 50000.0
-        account.add_holding(Holding("AAPL", 50, 150.0, 7500.0))
-        account.add_cash_equivalent(Holding("BIL", 500, 100.0, 50000.0))
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0, "MSFT": 300.0},
-            ["GOOGL", "MSFT"],
-            {"default_target_allocation_percent": 0.025}
-        )
-
-    def test_conversation_history_tracked(self, agent):
-        """Test that conversation history is tracked."""
-        agent.chat("hello")
-        agent.chat("show summary")
-        assert len(agent.state.messages) == 4  # 2 user + 2 assistant
-
-    def test_default_trade_triggers_confirmation(self, agent):
-        """Test that default trade request triggers confirmation."""
-        response = agent.chat("use default")
+class TestDefaultTrade:
+    def test_default_stages_orders_for_confirmation(self, agent):
+        reply = agent.chat("default")
+        assert reply.needs_confirmation is True
+        assert reply.preview is not None
         assert agent.state.awaiting_confirmation is True
-        assert "yes" in response.lower() or "confirm" in response.lower()
+        assert agent.state.pending_plan is not None
+        plan, analyses, sells, buys = reply.preview
+        assert len(buys) > 0  # GOOGL and MSFT not owned, plenty of cash
 
-    def test_confirmation_yes_generates_orders(self, agent):
-        """Test that confirming generates orders."""
-        # Set up a mock export callback
-        exported_files = []
-
-        def mock_export(sell_orders, buy_orders, prefix=None):
-            exported_files.append((len(sell_orders), len(buy_orders)))
-            return "sell.csv", "buy.csv"
-
-        agent.export_orders_callback = mock_export
-
-        # Request default trade
-        agent.chat("use default")
-
-        # Confirm
-        response = agent.chat("yes")
-        assert agent.state.awaiting_confirmation is False
-        assert len(exported_files) == 1 or "generated" in response.lower() or "order" in response.lower()
+    def test_default_with_empty_buy_list(self, sample_accounts, sample_prices,
+                                         sample_config):
+        agent = ConversationAgent(sample_accounts, sample_prices, [], sample_config)
+        agent.api_key = ""
+        reply = agent.chat("default")
+        assert reply.needs_confirmation is False
+        assert "empty" in reply.text.lower()
 
     def test_confirmation_no_cancels(self, agent):
-        """Test that declining cancels the trade."""
-        agent.chat("use default")
-        response = agent.chat("no")
+        agent.chat("default")
+        reply = agent.chat("no")
         assert agent.state.awaiting_confirmation is False
-        assert "cancel" in response.lower()
+        assert agent.state.pending_plan is None
+        assert "dismiss" in reply.text.lower()
+
+    def test_view_command_keeps_pending_then_confirm_button(self, agent, tmp_path):
+        """Regression for the screenshot bug: typing chatter while a plan is
+        staged must NOT strand it — the Confirm button still exports it."""
+        folder = tmp_path / "x"
+        folder.mkdir()
+        agent.export_orders_callback = lambda s, b: ("x/s.csv", "x/b.csv", folder)
+        agent.chat("default")
+        # User types something that is neither yes/no nor a known command.
+        # Without an API key this can't go to Claude, but the proposal must
+        # remain staged and confirmable via the deterministic button path.
+        agent.chat("hmm let me think")
+        assert agent.state.awaiting_confirmation is True
+        assert agent.state.pending_orders is not None
+        reply = agent.confirm_pending()
+        assert reply.exported is not None
+
+    def test_confirm_pending_button(self, agent, tmp_path):
+        folder = tmp_path / "x"
+        folder.mkdir()
+        agent.export_orders_callback = lambda s, b: ("x/s.csv", "x/b.csv", folder)
+        agent.chat("default")
+        reply = agent.confirm_pending()
+        assert reply.exported is not None
+        assert agent.state.pending_plan is None
+        assert agent.state.awaiting_confirmation is False
+
+    def test_confirm_pending_with_nothing_staged(self, agent):
+        reply = agent.confirm_pending()
+        assert reply.exported is None
+        assert "no staged proposal" in reply.text.lower()
+
+    def test_cancel_pending_button(self, agent):
+        agent.chat("default")
+        reply = agent.cancel_pending()
+        assert agent.state.pending_plan is None
+        assert agent.state.awaiting_confirmation is False
+        assert "dismiss" in reply.text.lower()
+
+    def test_cancel_pending_with_nothing_staged(self, agent):
+        reply = agent.cancel_pending()
+        assert "no staged proposal" in reply.text.lower()
+
+    def test_confirmation_yes_exports(self, agent, tmp_path):
+        exported = {}
+        folder = tmp_path / "06-09-2026"
+        folder.mkdir()
+
+        def fake_export(sells, buys):
+            exported["sells"], exported["buys"] = sells, buys
+            return "06-09-2026/sell_order.csv", "06-09-2026/buy_order.csv", folder
+
+        agent.export_orders_callback = fake_export
+        agent.chat("default")
+        reply = agent.chat("yes")
+
+        assert reply.exported is not None
+        assert reply.exported["n_buys"] == len(exported["buys"])
+        assert (tmp_path / "06-09-2026" / "trade_report.txt").exists()
+        assert agent.state.pending_plan is None
+
+    def test_view_command_keeps_pending_proposal(self, agent):
+        agent.chat("default")
+        reply = agent.chat("show holdings")
+        assert reply.view == "holdings"
+        # The pending proposal must survive a harmless view command.
+        assert agent.state.awaiting_confirmation is True
+        assert agent.state.pending_plan is not None
+        assert reply.needs_confirmation is True
+        assert "still staged" in reply.text
+
+    def test_no_key_revision_keeps_pending_proposal(self, agent):
+        agent.chat("default")
+        reply = agent.chat("actually make it 3 percent")  # no API key set
+        assert agent.state.awaiting_confirmation is True
+        assert agent.state.pending_plan is not None
+        assert reply.needs_confirmation is True
+        assert "API key" in reply.text
+
+    def test_yes_still_works_after_view_command(self, agent, tmp_path):
+        folder = tmp_path / "x"
+        folder.mkdir()
+        agent.export_orders_callback = lambda s, b: ("x/s.csv", "x/b.csv", folder)
+        agent.chat("default")
+        agent.chat("summary")
+        reply = agent.chat("yes")
+        assert reply.exported is not None
 
 
-class TestFormatting:
-    """Test output formatting methods."""
+# =============================================================================
+# Revision flow (#2): diff vs previous proposal
+# =============================================================================
 
-    @pytest.fixture
-    def agent(self):
-        """Create agent with sample data for formatting tests."""
-        account = Account(account_num="12345", client_name="Test Client")
-        account.cash = 10000.0
-        account.add_holding(Holding("AAPL", 100, 150.0, 15000.0))
-        account.add_holding(Holding("GOOGL", 50, 100.0, 5000.0))
-        account.add_cash_equivalent(Holding("BIL", 200, 100.0, 20000.0))
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0, "MSFT": 300.0},
-            ["GOOGL", "MSFT"],
-            {}
+class TestDeIdentification:
+    """The privacy guarantee: nothing identifying reaches the Anthropic API."""
+
+    def _fake_anthropic(self, captured, blocks):
+        """Build a fake anthropic.Anthropic that records create() kwargs."""
+        from types import SimpleNamespace
+
+        class FakeMessages:
+            def create(self, **kwargs):
+                captured.append(kwargs)
+                return SimpleNamespace(content=blocks)
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.messages = FakeMessages()
+
+        return FakeClient
+
+    def test_no_real_identity_in_payload(self, agent, monkeypatch):
+        import anthropic
+        from types import SimpleNamespace
+        agent.api_key = "sk-test-key-long-enough-000"
+        captured = []
+        text_block = SimpleNamespace(type="text", text="Your total is $45,000.")
+        monkeypatch.setattr(anthropic, "Anthropic",
+                            self._fake_anthropic(captured, [text_block]))
+
+        # advisor references the client by name in their own message, too
+        agent.chat("what is the total for Test Client?")
+
+        # Flatten everything sent to the API into one string.
+        kw = captured[0]
+        payload = repr(kw["system"]) + repr(kw["messages"])
+        assert "Test Client" not in payload          # real client name absent
+        assert "12345" not in payload                # real account number absent
+        assert "Client-001" in payload               # token present instead
+        assert "ACCT-001" in payload
+
+    def test_model_text_is_reidentified_for_display(self, agent, monkeypatch):
+        import anthropic
+        from types import SimpleNamespace
+        agent.api_key = "sk-test-key-long-enough-000"
+        captured = []
+        # model replies referring to the account by its token
+        tok = agent.anon.client_token["12345"]
+        reply_block = SimpleNamespace(type="text", text=f"{tok} holds $45,000.")
+        monkeypatch.setattr(anthropic, "Anthropic",
+                            self._fake_anthropic(captured, [reply_block]))
+
+        reply = agent.chat("how much does my client have?")
+        # the advisor sees the real name, not the token
+        assert "Test Client" in reply.text
+        assert tok not in reply.text
+
+
+class TestScreenshotBug:
+    """The reported bug: after a plan is staged, typing a non-yes/no message
+    (e.g. 'hi') must not destroy it, and confirmation must still work after."""
+
+    def test_chatter_then_confirm(self, agent, monkeypatch, tmp_path):
+        from conversation_agent import AgentReply
+        agent.api_key = "sk-test-key-long-enough-000"
+
+        # Claude just chats (no tool call) — simulates answering 'hi'.
+        monkeypatch.setattr(agent, "_chat_with_claude",
+                            lambda text: AgentReply(
+                                text="Hi! Your plan is still staged.",
+                                needs_confirmation=agent.state.awaiting_confirmation))
+        folder = tmp_path / "x"
+        folder.mkdir()
+        agent.export_orders_callback = lambda s, b: ("x/s.csv", "x/b.csv", folder)
+
+        agent.chat("default")
+        assert agent.state.awaiting_confirmation is True
+
+        r = agent.chat("hi")  # the message that used to strand the plan
+        assert agent.state.awaiting_confirmation is True   # still staged!
+        assert agent.state.pending_orders is not None
+        assert r.needs_confirmation is True
+
+        # And confirming now actually exports.
+        done = agent.confirm_pending()
+        assert done.exported is not None
+
+    def test_revision_replaces_plan_and_stays_confirmable(self, agent, monkeypatch):
+        from conversation_agent import AgentReply
+        agent.api_key = "sk-test-key-long-enough-000"
+        agent.chat("default")
+        first_plan = agent.state.pending_plan
+
+        # Claude re-proposes via the real staging path.
+        def fake_revision(text):
+            from execution_plan import (ExecutionPlan, BuyRule, QuantityType,
+                                        AllocationMethod)
+            plan = ExecutionPlan(
+                description="Revised: buy GOOGL to 1%",
+                buy_rules=[BuyRule(tickers=["GOOGL"],
+                                   quantity_type=QuantityType.PERCENT_OF_ACCOUNT,
+                                   quantity=0.01,
+                                   allocation_method=AllocationMethod.EQUAL_WEIGHT)])
+            return agent._simulate_and_stage(plan)
+
+        monkeypatch.setattr(agent, "_chat_with_claude", fake_revision)
+        r = agent.chat("make it 1%")
+        assert agent.state.pending_plan is not first_plan
+        assert r.needs_confirmation is True
+        assert agent.state.awaiting_confirmation is True
+
+
+class TestRevisionDiff:
+    def test_revision_keeps_previous_simulation_for_diff(self, agent, monkeypatch):
+        from conversation_agent import AgentReply
+        agent.api_key = "sk-test-key-long-enough-000"
+        captured = {}
+
+        def fake_claude(text):
+            captured["last_sim"] = agent.state.last_simulation
+            captured["pending"] = agent.state.pending_plan
+            return AgentReply(text="revised")
+
+        monkeypatch.setattr(agent, "_chat_with_claude", fake_claude)
+        agent.chat("default")
+        agent.chat("actually make it 3 percent")  # not yes/no -> revision
+        # At the moment the revision goes to the model, the old simulation is
+        # stashed for diffing. The staged proposal is intentionally KEPT (the
+        # fix for the stranded-plan bug) so it stays confirmable if Claude only
+        # answers instead of re-proposing.
+        assert captured["last_sim"] is not None
+        assert captured["pending"] is not None
+
+    def test_cancel_clears_previous_simulation(self, agent):
+        agent.chat("default")
+        agent.chat("no")
+        assert agent.state.last_simulation is None
+
+    def test_next_proposal_carries_diff(self, agent):
+        agent.chat("default")
+        sells, buys, _ = agent.state.pending_orders
+        agent.state.last_simulation = (sells, buys)
+        agent.state.awaiting_confirmation = False
+        agent.state.pending_orders = None
+
+        # Re-propose via the tool handler, as the model would.
+        plan = make_plan_dict()
+        _, reply = agent._tool_propose_plan(plan)
+        assert reply is not None
+        assert reply.diff is not None
+        assert "vs previous proposal" in reply.diff
+        assert agent.state.last_simulation is None  # consumed
+
+    def test_diff_reports_ticker_changes(self, agent):
+        prev_buys = [type("O", (), {"security": "MSFT", "estimated_value": 1000.0})()]
+        diff = agent._diff_simulations(([], prev_buys), ([], []))
+        assert "no longer includes MSFT" in diff
+        assert "buys 1→0" in diff
+
+
+# =============================================================================
+# Pre-flight alerts (#9) surface in replies
+# =============================================================================
+
+class TestPreflightAlerts:
+    def test_reply_carries_alerts_field(self, agent):
+        reply = agent.chat("default")
+        assert isinstance(reply.alerts, list)
+
+    def test_large_sell_plan_triggers_alert(self, agent):
+        # Sell the whole AAPL position: 15k of a 45k account = 33%... not enough.
+        # Sell AAPL and BIL: 35k of 45k = 78% -> alert.
+        plan = make_plan_dict(
+            description="Liquidate most of the account",
+            buy_rules=[],
+            sell_rules=[{
+                "tickers": ["AAPL", "BIL"],
+                "quantity_type": "all",
+                "quantity": None,
+                "priority": "largest_first",
+                "min_shares_remaining": None,
+                "max_percent_of_position": None,
+                "account_filter": None,
+            }],
         )
-
-    def test_format_holdings_includes_all_data(self, agent):
-        """Test holdings format includes all account data."""
-        output = agent._format_holdings()
-        assert "12345" in output
-        assert "AAPL" in output
-        assert "GOOGL" in output
-        assert "BIL" in output
-
-    def test_format_summary_includes_totals(self, agent):
-        """Test summary format includes totals."""
-        output = agent._format_summary()
-        assert "Total Value" in output
-        assert "Cash" in output
-
-    def test_format_buy_list_includes_prices(self, agent):
-        """Test buy list format includes prices."""
-        output = agent._format_buy_list()
-        assert "GOOGL" in output
-        assert "MSFT" in output
-        assert "$" in output
+        result, reply = agent._tool_propose_plan(plan)
+        assert reply is not None
+        assert any("Large liquidation" in a for a in reply.alerts)
+        assert "Pre-flight alerts" in result  # the model is told too
 
 
-class TestSettingsHandling:
-    """Test settings and API key handling."""
+# =============================================================================
+# Tool handlers (what the Claude loop calls)
+# =============================================================================
 
-    @pytest.fixture
-    def agent(self):
-        """Create agent for settings testing."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        return ConversationAgent(
-            {"12345": account},
-            {"GOOGL": 100.0},
-            ["GOOGL"],
-            {}
+class TestProposePlanTool:
+    def test_valid_plan_stages_orders(self, agent):
+        result, reply = agent._tool_propose_plan(make_plan_dict())
+        assert reply is not None
+        assert reply.needs_confirmation is True
+        assert "buy orders" in result
+        assert agent.state.awaiting_confirmation is True
+
+    def test_unknown_buy_ticker_rejected(self, agent):
+        plan = make_plan_dict()
+        plan["buy_rules"][0]["tickers"] = ["ZZZTOP"]
+        result, reply = agent._tool_propose_plan(plan)
+        assert reply is None
+        assert "ZZZTOP" in result
+        assert agent.state.awaiting_confirmation is False
+
+    def test_invalid_plan_returns_error(self, agent):
+        plan = make_plan_dict()
+        plan["buy_rules"][0]["quantity_type"] = "bogus_type"
+        result, reply = agent._tool_propose_plan(plan)
+        assert reply is None
+        assert "Invalid plan" in result
+
+    def test_plan_producing_no_orders_reports_skips(self, agent):
+        # AAPL is ~33% of the account, far above the skip threshold.
+        plan = make_plan_dict()
+        plan["buy_rules"][0]["tickers"] = ["AAPL"]
+        plan["buy_rules"][0]["skip_if_allocation_above"] = 0.02
+        result, reply = agent._tool_propose_plan(plan)
+        assert reply is None
+        assert "ZERO orders" in result
+        assert agent.state.awaiting_confirmation is False
+
+    def test_sell_all_plan(self, agent):
+        plan = make_plan_dict(
+            description="Sell all AAPL",
+            buy_rules=[],
+            sell_rules=[{
+                "tickers": ["AAPL"],
+                "quantity_type": "all",
+                "quantity": None,
+                "priority": "largest_first",
+                "min_shares_remaining": None,
+                "max_percent_of_position": None,
+                "account_filter": None,
+            }],
         )
-
-    def test_check_api_key_detected_as_command(self, agent):
-        """Test that 'check api key' is detected as a command."""
-        assert agent._detect_intent("check api key") == IntentType.COMMAND
-
-    def test_settings_detected_as_command(self, agent):
-        """Test that 'settings' is detected as a command."""
-        assert agent._detect_intent("settings") == IntentType.COMMAND
-
-    def test_configure_api_key_detected_as_command(self, agent):
-        """Test that 'configure api key' is detected as a command."""
-        assert agent._detect_intent("configure api key") == IntentType.COMMAND
-
-    def test_api_key_status_shown(self, agent):
-        """Test that API key status is shown."""
-        response = agent.chat("check api key")
-        assert "API Key Status" in response
-
-    def test_set_api_key_prompts_for_key(self, agent):
-        """Test that 'set api key' prompts for the key."""
-        response = agent.chat("set api key")
-        assert agent.state.awaiting_clarification is True
-        assert "enter" in response.lower() or "paste" in response.lower()
+        result, reply = agent._tool_propose_plan(plan)
+        assert reply is not None
+        _, _, sells, buys = reply.preview
+        assert len(sells) == 1
+        assert sells[0].security == "AAPL"
+        assert sells[0].shares == 100
 
 
-class TestEdgeCases:
-    """Test edge cases and error handling."""
+class TestAccountDetailsTool:
+    def test_lookup_by_number(self, agent):
+        result = agent._tool_account_details({"account_number": "12345"})
+        assert "Test Client" in result
+        assert "AAPL" in result
+        assert "BIL" in result
 
-    def test_empty_accounts(self):
-        """Test agent with no accounts."""
-        agent = ConversationAgent({}, {"GOOGL": 100.0}, ["GOOGL"], {})
-        response = agent.chat("show holdings")
-        # Should not crash
-        assert response is not None
+    def test_lookup_by_client_name(self, agent):
+        result = agent._tool_account_details({"account_number": "Test Client"})
+        assert "12345" in result
 
-    def test_empty_buy_list(self):
-        """Test agent with empty buy list."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        agent = ConversationAgent({"12345": account}, {}, [], {})
-        response = agent.chat("show buy list")
-        assert "No stocks" in response or "empty" in response.lower()
+    def test_unknown_account(self, agent):
+        result = agent._tool_account_details({"account_number": "99999"})
+        assert "No account found" in result
+        assert "12345" in result  # lists known accounts
 
-    def test_empty_input_handled(self):
-        """Test that empty input is handled gracefully."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        agent = ConversationAgent({"12345": account}, {}, [], {})
-        # The main loop filters empty input, but chat should handle it
-        response = agent.chat("")
-        assert response is not None
 
-    def test_special_characters_in_input(self):
-        """Test handling of special characters in input."""
-        account = Account(account_num="12345")
-        account.cash = 10000.0
-        agent = ConversationAgent({"12345": account}, {}, [], {})
-        response = agent.chat("What about <script>alert('xss')</script>?")
-        # Should not crash and should return some response
-        assert response is not None
+# =============================================================================
+# System prompt / context
+# =============================================================================
+
+class TestContext:
+    def test_system_prompt_includes_portfolio_tokenized(self, agent):
+        prompt = agent._system_prompt()
+        # real identity is tokenized; tokens + buy list + structure remain
+        assert "12345" not in prompt
+        assert "Test Client" not in prompt
+        assert agent.anon.account_token["12345"] in prompt
+        assert agent.anon.client_token["12345"] in prompt
+        assert "GOOGL" in prompt  # buy list (not identifying)
+
+    def test_portfolio_context_has_totals(self, agent):
+        context = agent._portfolio_context()
+        assert "$45,000.00" in context  # 10k cash + 15k AAPL + 20k BIL
+
+    def test_tools_include_plan_schema(self, agent):
+        tools = agent._tools()
+        plan_tool = next(t for t in tools if t["name"] == "propose_execution_plan")
+        assert plan_tool["input_schema"] == EXECUTION_PLAN_SCHEMA
+        # strict mode must stay off — the compiled grammar for this schema
+        # exceeds the API's size limit (400: "compiled grammar is too large")
+        assert "strict" not in plan_tool

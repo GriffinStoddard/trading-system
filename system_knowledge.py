@@ -1,180 +1,126 @@
 """
 System Knowledge Base
 
-Provides program knowledge for the conversational agent to answer user questions.
-This is injected into the LLM context so it can explain how the system works.
+Program knowledge injected into the agent's system prompt so it can answer
+questions about how the system works.
 """
 
 SYSTEM_KNOWLEDGE = """
-## Trading System Knowledge Base
-
 ### What This Program Does
-This program generates buy and sell order sheets for investment accounts.
-It reads client holdings from an Excel file and stock prices from a CSV file,
-then generates deterministic trade orders based on your specifications.
+This program generates buy and sell order sheets for client investment accounts.
+It reads holdings from an Excel file and stock prices from a CSV buy list, then
+generates deterministic trade orders from the advisor's instructions.
 
-The key design principle is: "LLM interprets intent, deterministic code calculates numbers."
-This means the AI understands what you want, but all actual calculations are done by
-predictable, auditable code - ensuring reproducibility.
+The key design principle: "LLM interprets intent, deterministic code calculates
+numbers." The AI translates what the advisor wants into a structured plan, but
+every share count and dollar amount is computed by predictable, auditable code —
+the same inputs always produce the same orders.
 
 ### How Order Generation Works
-1. Sell orders are generated first (if any sell rules exist)
-2. Cash from sells becomes available for buys
-3. Buy orders calculate exact shares based on available cash
-4. The cash floor is maintained (default 2%)
-5. Orders are exported to CSV files ready for upload to your trading platform
+1. Sell orders are generated first (cash from sells funds buys)
+2. Buy orders compute exact whole-share counts from available cash
+3. The cash floor is maintained (default 2% of account value)
+4. A preview is shown and the advisor confirms before any files are written
+5. Orders are exported as CSVs ready for upload to the trading platform
 
 ### Supported Operations
 
 **Buying:**
-- Buy to target allocation (e.g., "buy to 2.5% of account value per stock")
-- Buy specific dollar amounts (e.g., "buy $5,000 of GOOGL")
-- Buy specific share counts (e.g., "buy 100 shares of AAPL")
-- Skip stocks already owned above a threshold (e.g., "skip if I own 2% or more")
-- Buy only enough to reach target (don't over-buy if partially owned)
+- Buy to a target allocation ("buy to 2.5% of account value per stock")
+- Buy dollar amounts or share counts
+- Skip stocks already owned above a threshold ("skip if I own 2% or more")
+- Buy only enough to reach the target (top up, don't over-buy)
+- Skip buys smaller than a minimum fraction of the account (default 1%)
 
 **Selling:**
-- Sell entire positions ("sell all LUMN")
-- Sell partial positions by percentage ("sell 50% of COMM")
-- Sell by dollar amount ("raise $50,000 cash")
-- Sell by share count ("sell 100 shares")
-- Sell cash equivalents to fund buys (automatic when configured)
+- Sell entire positions, partial percentages, dollar amounts, or share counts
+- Raise cash across all holdings ("raise $50,000, largest positions first")
+- Constraints: minimum shares remaining, max percent of any position
+- Sell cash equivalents automatically to fund buys
+- Sell cash equivalents directly to move them to cash ("sell all cash
+  equivalents", "raise $50k by selling cash equivalents") — a standalone sell,
+  not just funding buys
 
-**Conditional Sell-Then-Buy:**
-- Sell a stock and buy another with proceeds, only for accounts that sold
-- Example: "Sell all GOOGL, then buy AAPL with the proceeds for accounts that sold GOOGL"
-- The buy will only execute for accounts that actually had GOOGL to sell
+**Conditional sell-then-buy:**
+- "Sell all GOOGL, buy AAPL with the proceeds" — the buy only runs in accounts
+  that actually sold GOOGL, funded by those proceeds
 
-**Account Filtering:**
-- Filter by account value (min/max)
-- Filter by specific account numbers
-- Filter by holdings (only accounts that hold certain tickers)
+**Account filtering:**
+- By account value (min/max), account numbers, held tickers
+- By client name (include or exclude, partial match, case-insensitive)
+- Per-rule filters: different sell rules can target different account subsets
 
-**Cash Management:**
-- Maintain minimum cash percentage (default 2%)
-- Maintain minimum cash dollar amount
-- Sell cash equivalents in order (largest first or smallest first)
+**Cash management:**
+- Minimum cash percentage and/or dollar floor per account
+- Cash equivalents sold largest-first (or smallest-first) when funding buys
 
 ### Cash Equivalents
-Cash equivalents are tickers treated as liquid sources that can be sold to fund buys.
-The list of cash equivalents is configured in config.json under the "cash_equivalents" key.
-Common examples include money market funds and short-term Treasury ETFs.
-
-### Quantity Types Explained
-- **percent_of_account**: 0.025 = 2.5% of total account value (used for target allocations)
-- **percent_of_position**: 0.5 = 50% of that specific holding (used for partial sells)
-- **shares**: exact number of shares to buy or sell
-- **dollars**: specific dollar amount to buy or sell
-- **all**: entire position (used for complete liquidation)
-- **to_target**: adjust to reach target allocation
+Cash equivalents are tickers treated as liquid cash sources (money market funds,
+short-term Treasury ETFs). They can be sold automatically to fund buys. The list
+is configured in config.json under "cash_equivalents".
 
 ### The Cash Floor
-The cash floor ensures a minimum percentage of cash remains in each account after trades.
-By default, it's set to 2%.
-
-When generating buy orders, the system calculates:
-available_cash = current_cash - (account_value × min_cash_percent)
-
-So for a $100,000 account with 2% floor, $2,000 will always remain in cash.
-You can change this in config.json or specify it in your trade request.
+The cash floor keeps a minimum fraction of each account in cash after trades
+(default 2%). Available cash for buys = current cash − (account value × floor).
+For a $100,000 account with a 2% floor, $2,000 always stays in cash.
 
 ### How Sells Fund Buys
-When you request buys and don't have enough cash:
-1. System calculates total cash needed for all buy orders
-2. Subtracts available cash (minus the cash floor requirement)
-3. If there's a shortfall and you've enabled cash equivalent selling:
-   - Sells cash equivalents starting with the largest position
-   - Raises just enough cash to cover the shortfall
-4. Generates buy orders with the now-available cash
+If buys need more cash than is available above the floor and cash-equivalent
+selling is enabled, the system sells cash equivalents (largest position first),
+raising just enough to cover the shortfall, then sizes the buy orders.
 
 ### Default Specification
-The default trade specification (no API key required):
-- Buy to 2.5% target allocation for each stock on the buy list
-- Skip any stocks already owned at 2% or more
-- Sell cash equivalents (largest first) if needed to fund buys
-- Maintain 2% cash floor
+The built-in default (works without an API key):
+- Buy to 2.5% target allocation for each buy-list stock
+- Skip stocks already owned at 2% or more
+- Skip buys under 1% of the account
+- Sell cash equivalents (largest first) if needed
+- Maintain a 2% cash floor
 
 ### Output Files
-After generating orders, three files are created:
-- **orders_*_SELL.csv**: Sell orders (execute these FIRST)
-- **orders_*_BUY.csv**: Buy orders (execute AFTER sells settle)
-- **orders_*_REPORT.txt**: Human-readable summary for review
-
-Important: Always execute sell orders first and wait for settlement before executing buy orders.
+After the advisor confirms, three files are written to a date-named folder
+(e.g. 06-09-2026/):
+- **sell_order.csv** — execute these FIRST
+- **buy_order.csv** — execute AFTER sells settle
+- **trade_report.txt** — full human-readable audit report
 
 ### Required Input Files
-**investment_data.xlsx** - Account holdings with required columns:
-- Account Number
-- Account Name (optional, also accepts 'Client Name')
-- Symbol / CUSIP / ID
-- Quantity
-- Price / NAV
-- Market Value
+**investment_data.xlsx** — holdings with columns: Account Number, Account Name
+(optional), Symbol / CUSIP / ID, Quantity, Price / NAV, Market Value.
+**stock_prices.csv** — buy list with TICKER and PRICE columns.
 
-**stock_prices.csv** - Buy list with columns:
-- TICKER: Stock symbol
-- PRICE: Current price
-
-### Commands You Can Use
-- **exit** or **quit**: Exit the program
-- **help**: Get help with what you can do
-- **holdings** or **show holdings**: Display detailed holdings for all accounts
-- **summary**: Show account summary
-- **buy list** or **show buy list**: Show the current buy list with prices
+### Commands
+summary, holdings, buy list, add TICKER PRICE, update TICKER PRICE,
+remove TICKER, default, api key, help, exit.
 
 ### Configuration (config.json)
-You can customize:
-- **anthropic_api_key**: Your API key for custom specifications
-- **default_excel_file**: Path to holdings file
-- **default_prices_file**: Path to buy list/prices file
-- **cash_equivalents**: List of tickers treated as cash equivalents
-- **default_cash_floor_percent**: Minimum cash to maintain (0.02 = 2%)
-- **default_target_allocation_percent**: Default buy target (0.025 = 2.5%)
-- **default_skip_if_above_percent**: Skip threshold (0.02 = 2%)
+anthropic_api_key, model, advisor_name, default_excel_file, default_prices_file,
+cash_equivalents, default_cash_floor_percent (0.02),
+default_target_allocation_percent (0.025), default_skip_if_above_percent (0.02),
+default_min_buy_percent (0.01).
 """
 
 CAPABILITIES_SUMMARY = """
 I can help you with:
 
-1. **Generate Trade Orders**: Tell me what trades you want to make and I'll create the order sheets
-   - "Buy all stocks on my buy list at 2.5% each"
-   - "Sell all LUMN and COMM"
-   - "Raise $50,000 cash"
+1. **Generate trade orders** — describe the trades in plain English
+   - "Buy everything on my buy list at 2.5% each"
+   - "Sell all LUMN and COMM, put the proceeds into GOOGL"
+   - "Raise $50,000 cash, skip accounts under $25k"
 
-2. **Answer Questions**: Ask me how the system works
-   - "How does the cash floor work?"
-   - "What are cash equivalents?"
-   - "How do sells fund buys?"
+2. **Answer questions** — "How does the cash floor work?"
 
-3. **View Your Data**: See your current positions
-   - "Show my holdings"
-   - "Show account summary"
-   - "Show the buy list"
+3. **Show your data** — summary, holdings, buy list
 
-4. **Settings**: Configure your API key
-   - "Check API key" - see if you have an API key configured
-   - "Set API key" - add or update your Anthropic API key
+4. **Manage the buy list** — add NVDA 900, update AAPL 250, remove MSFT
 
-5. **Get Help**: I can explain any feature or option
-
-Just tell me what you'd like to do in plain English!
+Trades always show a preview and require your yes/no confirmation before any
+order files are written.
 """
 
 WELCOME_MESSAGE = """
-================================================================================
-   TRADING SYSTEM v2.2.0 - Conversational Mode
-================================================================================
+Trading System — Conversational Mode
 
-Hello! I'm your trading assistant. I can help you:
-- Generate buy/sell order sheets from natural language instructions
-- Answer questions about how the system works
-- Show you your current holdings and account data
-
-Just tell me what you'd like to do. For example:
-- "Buy the stocks on my buy list at 2.5% each"
-- "How does the cash floor work?"
-- "Show my holdings"
-
-Type 'exit' to quit.
-================================================================================
+Describe what you want in plain English and I'll generate the order sheets,
+or ask me how anything works. Type 'help' for commands, 'exit' to quit.
 """

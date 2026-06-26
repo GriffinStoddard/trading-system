@@ -1,6 +1,18 @@
-# Generated output files
+# Generated order output (date-named folders: MM-DD-YYYY/) + loose order files
+[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]/
+sell_order.csv
+buy_order.csv
+trade_report.txt
 orders_*.csv
 *_REPORT.txt
+
+# Client data — never commit (holdings exports are sensitive)
+*.xlsx
+investment_data.xlsx
+
+# Local scratch / not for the repo
+bugs/
+test/
 
 # Python
 __pycache__/

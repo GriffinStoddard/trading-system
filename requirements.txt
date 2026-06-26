@@ -1,3 +1,10 @@
 pandas>=2.0.0
 openpyxl>=3.1.0
-anthropic>=0.18.0
+anthropic>=0.40.0
+rich>=13.0.0
+yfinance>=0.2.0
+pywebview>=5.0
+# Windows desktop backend for pywebview (WinForms/EdgeChromium). pywebview pulls
+# this in transitively on win32; pinned explicitly so a future change can't
+# silently drop it. >=3.0.4 stays clear of the pythonnet crash on Python 3.13+.
+pythonnet>=3.0.4; sys_platform == "win32"

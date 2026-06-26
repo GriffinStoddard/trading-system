@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stoddard Financial — Trading System</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ Loading screen ============ -->
+<div id="loading-screen" class="screen">
+  <div class="screen-inner">
+    <div class="brand-mark">STODDARD FINANCIAL</div>
+    <div class="brand-mark-sub">TRADING SYSTEM</div>
+    <div class="loader-bar"><span></span></div>
+    <div class="screen-note">Loading portfolio data&hellip;</div>
+  </div>
+</div>
+
+<!-- ============ Error screen ============ -->
+<div id="error-screen" class="screen hidden">
+  <div class="screen-inner">
+    <div class="brand-mark">STODDARD FINANCIAL</div>
+    <div class="brand-mark-sub">TRADING SYSTEM</div>
+    <div class="error-box">
+      <div class="error-box-title">Failed to load</div>
+      <div id="error-message" class="error-box-msg"></div>
+    </div>
+    <div class="error-actions">
+      <button id="error-locate" class="btn btn-accent hidden">Locate holdings file&hellip;</button>
+      <button id="error-retry" class="btn">Retry</button>
+      <button id="error-quit" class="btn btn-ghost">Quit</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Application ============ -->
+<div id="app" class="hidden">
+
+  <!-- Top bar -->
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-name">Stoddard Financial</span>
+      <span class="brand-divider"></span>
+      <span class="brand-sub">Trading System <span id="topbar-version" class="brand-version"></span></span>
+    </div>
+    <div class="topbar-stats">
+      <div class="tstat">
+        <span class="tstat-label">Total AUM</span>
+        <span id="stat-aum" class="tstat-value num">&mdash;</span>
+      </div>
+      <div class="tstat">
+        <span class="tstat-label">Accounts</span>
+        <span id="stat-accounts" class="tstat-value num">&mdash;</span>
+      </div>
+      <div class="tstat">
+        <span class="tstat-label">List updated</span>
+        <span id="stat-prices" class="tstat-value num">&mdash;</span>
+      </div>
+    </div>
+    <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+  </header>
+
+  <!-- API key banner -->
+  <div id="key-banner" class="key-banner hidden">
+    <div class="key-banner-text">
+      <strong>No API key configured.</strong>
+      Natural-language requests need an Anthropic API key &mdash; <code>default</code> and the data views still work without one.
+    </div>
+    <div class="key-banner-form">
+      <input id="key-banner-input" type="password" class="text-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+      <button id="key-banner-save" class="btn btn-accent btn-sm">Save key</button>
+    </div>
+    <button id="key-banner-dismiss" class="icon-btn" title="Dismiss" aria-label="Dismiss banner">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+    </button>
+  </div>
+
+  <!-- Layout -->
+  <div id="layout">
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+
+      <section id="accounts-section" class="side-section">
+        <div class="side-header">
+          <span class="side-label">Accounts</span>
+          <span id="accounts-count" class="side-count num"></span>
+        </div>
+        <div class="side-search">
+          <input id="account-filter" type="text" class="text-input" placeholder="Filter by name or number&hellip;" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="account-list" class="side-scroll"></div>
+      </section>
+
+      <section id="buylist-section" class="side-section">
+        <div class="side-header">
+          <span class="side-label">Buy list</span>
+          <button id="refresh-btn" class="btn btn-ghost btn-sm" title="Fetch live prices">
+            <svg class="refresh-glyph" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div id="buy-list" class="side-scroll buy-scroll"></div>
+        <form id="buylist-add-form" class="buylist-add" autocomplete="off">
+          <input id="add-ticker" type="text" class="text-input" placeholder="Ticker — price auto-fetched" maxlength="10" spellcheck="false">
+          <button type="submit" id="add-btn" class="btn btn-ghost btn-sm" title="Add to buy list — live price fetched automatically">Add</button>
+          <button type="button" id="clear-btn" class="btn btn-ghost btn-sm" title="Remove all tickers from the buy list">Clear all</button>
+        </form>
+        <div id="prices-caption" class="prices-caption num"></div>
+      </section>
+
+    </aside>
+
+    <!-- Main: chat -->
+    <main id="main">
+      <div id="chat-thread"></div>
+      <!-- Persistent staged-plan bar: stays pinned while a plan awaits the
+           advisor's decision, so it can never get buried in the chat scroll. -->
+      <div id="staged-bar" class="hidden">
+        <div class="staged-info">
+          <span class="staged-dot" aria-hidden="true"></span>
+          <div class="staged-text">
+            <span class="staged-title">Plan staged for review</span>
+            <span id="staged-summary" class="staged-summary num"></span>
+          </div>
+        </div>
+        <div class="staged-actions">
+          <button id="staged-view" type="button" class="btn btn-sm">View full plan</button>
+          <button id="staged-confirm" type="button" class="btn btn-confirm btn-sm">Confirm &amp; export</button>
+          <button id="staged-discard" type="button" class="btn btn-ghost btn-sm">Discard</button>
+        </div>
+      </div>
+      <div id="composer-area">
+        <div class="chips">
+          <button id="chip-default" class="chip" type="button">Run default spec</button>
+          <button id="chip-refresh" class="chip" type="button">Refresh prices</button>
+          <button id="chip-help" class="chip" type="button">Help</button>
+        </div>
+        <div class="composer">
+          <textarea id="composer-input" rows="1" placeholder="Describe a trade in plain English&hellip;  (Enter to send, Shift+Enter for a new line)" spellcheck="true"></textarea>
+          <button id="send-btn" class="btn btn-accent" title="Send (Enter)">Send</button>
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Holdings slide-over -->
+  <div id="holdings-overlay" class="overlay hidden"></div>
+  <aside id="holdings-panel" aria-hidden="true">
+    <div class="panel-header">
+      <div>
+        <div id="holdings-title" class="panel-title"></div>
+        <div class="panel-sub"><span id="holdings-number" class="num"></span><span class="dot-sep"></span><span id="holdings-total" class="num"></span></div>
+      </div>
+      <button id="holdings-close" class="icon-btn" title="Close" aria-label="Close holdings">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="panel-body">
+      <table class="data-table" id="holdings-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Kind</th>
+            <th class="r">Shares</th>
+            <th class="r">Price</th>
+            <th class="r">Value</th>
+            <th class="r">Alloc</th>
+          </tr>
+        </thead>
+        <tbody id="holdings-body"></tbody>
+      </table>
+    </div>
+  </aside>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="modal-header">
+        <span class="side-label">Settings</span>
+        <button id="settings-close" class="icon-btn" title="Close" aria-label="Close settings">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="kv-row"><span class="kv-key">Version</span><span id="settings-version" class="kv-val num"></span></div>
+        <div class="kv-row"><span class="kv-key">Model</span><span id="settings-model" class="kv-val num"></span></div>
+        <div class="kv-row"><span class="kv-key">API key</span><span id="settings-key-status" class="kv-val"></span></div>
+        <div class="modal-section-label side-label">Data</div>
+        <div class="data-row">
+          <span class="data-row-key">Holdings file</span>
+          <span id="settings-data-path" class="data-row-path"></span>
+          <button id="settings-data-change" class="btn btn-sm">Change&hellip;</button>
+        </div>
+        <div class="data-row">
+          <span class="data-row-key">Exports folder</span>
+          <span id="settings-exports-path" class="data-row-path"></span>
+          <button id="settings-exports-open" class="btn btn-sm" title="Open the exports folder in the file manager">Open</button>
+        </div>
+        <div class="modal-section-label side-label">Update API key</div>
+        <div class="modal-key-form">
+          <input id="settings-key" type="password" class="text-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+          <button id="settings-key-save" class="btn btn-accent btn-sm">Save</button>
+        </div>
+        <div class="key-footnote">Stored locally in config.json and used only to interpret your instructions.</div>
+        <div id="settings-key-msg" class="settings-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full-screen plan detail modal -->
+  <div id="plan-modal" class="overlay hidden">
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-label="Trade plan details">
+      <div class="modal-header">
+        <span class="side-label">Trade plan — full detail</span>
+        <button id="plan-close" class="icon-btn" title="Close" aria-label="Close plan detail">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <div id="plan-modal-body" class="modal-body plan-modal-body"></div>
+      <div class="plan-modal-footer">
+        <button id="plan-confirm" type="button" class="btn btn-confirm">Confirm &amp; export</button>
+        <button id="plan-changes" type="button" class="btn btn-cancel">Request changes</button>
+        <button id="plan-dismiss" type="button" class="btn btn-ghost">Discard plan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toast-container"></div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

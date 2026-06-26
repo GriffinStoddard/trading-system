@@ -430,6 +430,62 @@ class TestSellRuleEdgeCases:
         assert sell_orders[0].security == "BIL"
         assert sell_orders[0].shares == 200
 
+    def test_sell_all_cash_equivalents_wildcard(self, multi_holding_account):
+        """CASH_EQUIVALENTS token sells every cash-equivalent holding."""
+        accounts = {"MULTI001": multi_holding_account}  # holds BIL + USFR as CEs
+        prices = {"BIL": 91.50, "USFR": 50.0}
+
+        plan = ExecutionPlan(
+            description="Sell all cash equivalents",
+            sell_rules=[SellRule(tickers=["CASH_EQUIVALENTS"],
+                                 quantity_type=QuantityType.ALL)],
+        )
+        generator = OrderGenerator(accounts, prices)
+        sell_orders, _ = generator.execute_plan(plan)
+
+        sold = {o.security for o in sell_orders}
+        assert sold == {"BIL", "USFR"}
+        assert all(o.action == "Sell" for o in sell_orders)
+
+    def test_raise_dollars_from_cash_equivalents(self, multi_holding_account):
+        """CASH_EQUIVALENTS + dollars raises up to the target per account
+        (cumulative across the CE basket), capped at what's held."""
+        accounts = {"MULTI001": multi_holding_account}
+        # CE value present: BIL 200*91.50=18,300 + USFR 100*50=5,000 = 23,300
+        prices = {"BIL": 91.50, "USFR": 50.0}
+
+        plan = ExecutionPlan(
+            description="Raise $10k from cash equivalents",
+            sell_rules=[SellRule(tickers=["CASH_EQUIVALENTS"],
+                                 quantity_type=QuantityType.DOLLARS,
+                                 quantity=10000)],
+        )
+        generator = OrderGenerator(accounts, prices)
+        sell_orders, _ = generator.execute_plan(plan)
+
+        raised = sum(o.estimated_value for o in sell_orders)
+        # cumulative target: stops once ~$10k raised (largest first => BIL alone covers it)
+        assert raised >= 10000
+        assert raised < 18300 + 5000  # did NOT liquidate the whole basket
+        assert all(o.security in ("BIL", "USFR") for o in sell_orders)
+
+    def test_plain_wildcard_excludes_cash_equivalents(self, multi_holding_account):
+        """The '*' wildcard sells regular holdings only, never cash equivalents."""
+        accounts = {"MULTI001": multi_holding_account}
+        prices = {"AAPL": 150.0, "GOOGL": 2500.0, "MSFT": 300.0,
+                  "BIL": 91.50, "USFR": 50.0}
+
+        plan = ExecutionPlan(
+            description="Sell everything (holdings only)",
+            sell_rules=[SellRule(tickers=["*"], quantity_type=QuantityType.ALL)],
+        )
+        generator = OrderGenerator(accounts, prices)
+        sell_orders, _ = generator.execute_plan(plan)
+
+        sold = {o.security for o in sell_orders}
+        assert "BIL" not in sold and "USFR" not in sold
+        assert sold == {"AAPL", "GOOGL", "MSFT"}
+
     def test_sell_non_existent_ticker(self, multi_holding_account):
         """Sell non-existent ticker skips gracefully."""
         accounts = {"MULTI001": multi_holding_account}
